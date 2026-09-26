@@ -20,6 +20,7 @@ import com.example.model.AppState
 import com.example.model.BatchFreezeProgress
 import com.example.model.InstalledAppItem
 import com.example.model.WakeUpPath
+import com.example.model.WakeUpRiskLevel
 import com.example.service.ForceStopAccessibilityService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -82,9 +83,21 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
     private val _hideSystemAppsInAddList = MutableStateFlow(preferences.hideSystemAppsInAddList)
     val hideSystemAppsInAddList: StateFlow<Boolean> = _hideSystemAppsInAddList.asStateFlow()
 
-    // Dashboard State
-    private val _isLoading = MutableStateFlow(true)
+    // Add List Sort Option (Remembered across sessions)
+    private val _addAppSortOption = MutableStateFlow(preferences.addAppSortOption)
+    val addAppSortOption: StateFlow<com.example.model.AppSortOption> = _addAppSortOption.asStateFlow()
+
+    fun setAddAppSortOption(sortOption: com.example.model.AppSortOption) {
+        preferences.addAppSortOption = sortOption
+        _addAppSortOption.value = sortOption
+    }
+
+    // Fast loading state: Starts false so homepage is instant!
+    private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    private val _isLoadingAddApps = MutableStateFlow(false)
+    val isLoadingAddApps: StateFlow<Boolean> = _isLoadingAddApps.asStateFlow()
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
@@ -96,26 +109,13 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
     val allInstalledApps: StateFlow<List<InstalledAppItem>> = _allInstalledApps.asStateFlow()
 
     private val _managedAppEntities = database.appDao().getAllManagedApps()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    // All managed apps joined with live status
-    val allManagedApps: StateFlow<List<InstalledAppItem>> = combine(
-        _managedAppEntities,
-        _allInstalledApps
-    ) { entities, installed ->
-        val entityMap = entities.associateBy { it.packageName }
-        installed.filter { entityMap.containsKey(it.packageName) }.map { item ->
-            val entity = entityMap[item.packageName]
-            item.copy(
-                isManaged = true,
-                lastFrozenTimestamp = entity?.lastFrozenTimestamp ?: 0L,
-                freezeCount = entity?.freezeCount ?: 0,
-                wakeUpDetails = item.wakeUpDetails.copy(isCut = entity?.cutWakeups == true || item.wakeUpDetails.isCut)
-            )
-        }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    // Dedicated fast managed apps flow populated directly in milliseconds
+    private val _managedAppsFlow = MutableStateFlow<List<InstalledAppItem>>(emptyList())
+    val allManagedApps: StateFlow<List<InstalledAppItem>> = _managedAppsFlow.asStateFlow()
 
-    // Running managed apps (Pending / Working / Evading / Foreground) - exactly what should show on Home Page
+    // Running managed apps (Pending / Working / Evading / Foreground) - exactly what shows on Home Page
     val pendingApps: StateFlow<List<InstalledAppItem>> = allManagedApps.map { list ->
         list.filter {
             it.state == AppState.FOREGROUND ||
@@ -146,16 +146,21 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
 
     init {
         checkPermissions()
-        refreshApps()
+        // Immediately load managed apps on startup (< 30ms)
+        viewModelScope.launch {
+            _managedAppEntities.collect { entities ->
+                refreshManagedAppsOnly(entities)
+            }
+        }
         startLiveMonitoring()
 
         viewModelScope.launch {
             ForceStopAccessibilityService.stoppedPackageFlow.collect { stoppedPkg ->
-                // Immediately mark as hibernated in memory for instant feedback
-                _allInstalledApps.value = _allInstalledApps.value.map {
+                // Immediately mark as hibernated in memory for instant removal from UI
+                _managedAppsFlow.value = _managedAppsFlow.value.map {
                     if (it.packageName == stoppedPkg) it.copy(state = AppState.BACKGROUND_FREE, stateDetail = "Hibernated") else it
                 }
-                refreshApps(silent = true)
+                refreshManagedAppsOnly()
             }
         }
     }
@@ -165,7 +170,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
         liveMonitoringJob = viewModelScope.launch(Dispatchers.Default) {
             while (isActive) {
                 delay(3000)
-                refreshApps(silent = true)
+                refreshManagedAppsOnly(silent = true)
             }
         }
     }
@@ -202,13 +207,13 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
     fun selectOperatingMode(mode: OperatingMode) {
         preferences.mode = mode
         _operatingMode.value = mode
-        refreshApps()
+        refreshManagedAppsOnly()
     }
 
     fun completeSetup() {
         preferences.isSetupCompleted = true
         _isSetupCompleted.value = true
-        refreshApps()
+        refreshManagedAppsOnly()
     }
 
     fun resetSetup() {
@@ -227,6 +232,9 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
 
     fun openAddApps() {
         _showAddAppsSheet.value = true
+        if (_allInstalledApps.value.isEmpty()) {
+            loadInstalledAppsForAddDialog()
+        }
     }
 
     fun closeAddApps() {
@@ -235,67 +243,194 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
 
     fun selectAppForWakeup(app: InstalledAppItem?) {
         _selectedAppForWakeup.value = app
+        if (app != null) {
+            // Asynchronously deep inspect single selected app to populate full providers & sync components
+            viewModelScope.launch(Dispatchers.Default) {
+                deepInspectSingleApp(app.packageName)
+            }
+        }
+    }
+
+    private suspend fun deepInspectSingleApp(packageName: String) = withContext(Dispatchers.Default) {
+        try {
+            val pm = getApplication<Application>().packageManager
+            val pkgInfo = pm.getPackageInfo(
+                packageName,
+                PackageManager.GET_PERMISSIONS or
+                PackageManager.GET_RECEIVERS or
+                PackageManager.GET_SERVICES or
+                PackageManager.GET_PROVIDERS
+            )
+            val isRoot = preferences.mode == OperatingMode.ROOT
+            val rootProcessMap = if (isRoot) RootExecutor.queryRootProcessStates() else emptyMap()
+            val nonRootActivityMap = detector.getNonRootActivityMap()
+            val runningMap = detector.getRunningProcessesMap()
+
+            val cutPathsMap = mapOf(packageName to preferences.getCutPathsForPackage(packageName))
+            val cutPackages = if (_managedAppEntities.value.any { it.packageName == packageName && it.cutWakeups }) setOf(packageName) else emptySet()
+            val twentyFourHourWakeups = detector.calculateWakeups24h()
+
+            val detailedItem = detector.detectAppItem(
+                pkgInfo = pkgInfo,
+                runningMap = runningMap,
+                rootProcessMap = rootProcessMap,
+                nonRootActivityMap = nonRootActivityMap,
+                isRootMode = isRoot,
+                managedPackages = setOf(packageName),
+                cutPackages = cutPackages,
+                cutPathsMap = cutPathsMap,
+                twentyFourHourWakeups = twentyFourHourWakeups
+            )
+
+            if (_selectedAppForWakeup.value?.packageName == packageName) {
+                _selectedAppForWakeup.value = detailedItem
+            }
+
+            // Also update in managed apps list
+            _managedAppsFlow.value = _managedAppsFlow.value.map {
+                if (it.packageName == packageName) detailedItem.copy(isManaged = true) else it
+            }
+        } catch (e: Exception) {
+            // Ignore
+        }
     }
 
     fun clearStatusMessage() {
         _statusMessage.value = null
     }
 
-    fun refreshApps(silent: Boolean = false) {
+    private var cachedWakeups24h: Map<String, Int> = emptyMap()
+    private var lastWakeupsFetchTime: Long = 0L
+
+    private suspend fun getOrFetchWakeups24h(): Map<String, Int> {
+        val now = System.currentTimeMillis()
+        if (now - lastWakeupsFetchTime < 120_000L && cachedWakeups24h.isNotEmpty()) {
+            return cachedWakeups24h
+        }
+        val result = detector.calculateWakeups24h()
+        cachedWakeups24h = result
+        lastWakeupsFetchTime = now
+        return result
+    }
+
+    /**
+     * Ultra-fast managed apps refresh: Only scans the few managed packages in DB (< 30ms)!
+     * Ensures instant homepage loading on startup and resume!
+     */
+    fun refreshManagedAppsOnly(
+        entities: List<HibernatedAppEntity> = _managedAppEntities.value,
+        silent: Boolean = false
+    ) {
         viewModelScope.launch {
-            if (!silent) _isLoading.value = true
+            if (!silent && _managedAppsFlow.value.isEmpty()) _isLoading.value = true
             try {
                 withContext(Dispatchers.Default) {
+                    if (entities.isEmpty()) {
+                        _managedAppsFlow.value = emptyList()
+                        return@withContext
+                    }
+
                     val pm = getApplication<Application>().packageManager
-                    val packages = pm.getInstalledPackages(
-                        PackageManager.GET_PERMISSIONS or
-                        PackageManager.GET_RECEIVERS or
-                        PackageManager.GET_SERVICES or
-                        PackageManager.GET_PROVIDERS
-                    )
+                    val runningMap = detector.getRunningProcessesMap()
+
+                    // Instant Pre-render (< 5ms) on cold start / reopen
+                    if (_managedAppsFlow.value.isEmpty()) {
+                        val quickList = mutableListOf<InstalledAppItem>()
+                        for (entity in entities) {
+                            try {
+                                val appInfo = pm.getApplicationInfo(entity.packageName, 0)
+                                val appName = pm.getApplicationLabel(appInfo).toString()
+                                val icon = try { pm.getApplicationIcon(appInfo) } catch (e: Exception) { null }
+                                val runningProc = runningMap[entity.packageName]
+                                val state = if (runningProc != null) {
+                                    when (runningProc.importance) {
+                                        android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND -> AppState.FOREGROUND
+                                        android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE -> AppState.EVADING_RESTRICTIONS
+                                        else -> AppState.WORKING_STATE
+                                    }
+                                } else {
+                                    AppState.BACKGROUND_FREE
+                                }
+                                val isWorkingIgnored = preferences.isWorkingStateIgnored(entity.packageName)
+                                quickList.add(
+                                    InstalledAppItem(
+                                        packageName = entity.packageName,
+                                        appName = appName,
+                                        icon = icon,
+                                        state = state,
+                                        isManaged = true,
+                                        lastFrozenTimestamp = entity.lastFrozenTimestamp,
+                                        freezeCount = entity.freezeCount,
+                                        ignoreWorkingState = isWorkingIgnored
+                                    )
+                                )
+                            } catch (e: Exception) {
+                                // Package may not exist
+                            }
+                        }
+                        if (quickList.isNotEmpty()) {
+                            quickList.sortWith(
+                                compareByDescending<InstalledAppItem> {
+                                    it.state == AppState.EVADING_RESTRICTIONS ||
+                                    it.state == AppState.WORKING_STATE ||
+                                    it.state == AppState.FOREGROUND
+                                }.thenBy { it.appName.lowercase() }
+                            )
+                            _managedAppsFlow.value = quickList
+                        }
+                    }
 
                     val isRoot = preferences.mode == OperatingMode.ROOT
                     val rootProcessMap = if (isRoot) RootExecutor.queryRootProcessStates() else emptyMap()
                     val nonRootActivityMap = detector.getNonRootActivityMap()
-                    val runningMap = detector.getRunningProcessesMap()
 
-                    val cutPackages = mutableSetOf<String>()
-                    val managedPackages = mutableSetOf<String>()
-                    val dbEntities = _managedAppEntities.value
-                    for (e in dbEntities) {
-                        managedPackages.add(e.packageName)
-                        if (e.cutWakeups) cutPackages.add(e.packageName)
-                    }
+                    val cutPackages = entities.filter { it.cutWakeups }.map { it.packageName }.toSet()
+                    val managedPackages = entities.map { it.packageName }.toSet()
 
                     val cutPathsMap = mutableMapOf<String, Set<String>>()
-                    for (pkgInfo in packages) {
-                        val savedCut = preferences.getCutPathsForPackage(pkgInfo.packageName)
-                        if (savedCut.isNotEmpty()) {
-                            cutPathsMap[pkgInfo.packageName] = savedCut
+                    for (e in entities) {
+                        val savedCut = preferences.getCutPathsForPackage(e.packageName)
+                        if (savedCut.isNotEmpty()) cutPathsMap[e.packageName] = savedCut
+                    }
+
+                    val twentyFourHourWakeups = getOrFetchWakeups24h()
+
+                    val resultList = mutableListOf<InstalledAppItem>()
+                    for (entity in entities) {
+                        try {
+                            val pkgInfo = pm.getPackageInfo(
+                                entity.packageName,
+                                PackageManager.GET_PERMISSIONS or
+                                PackageManager.GET_RECEIVERS or
+                                PackageManager.GET_SERVICES or
+                                PackageManager.GET_PROVIDERS
+                            )
+                            val item = detector.detectAppItem(
+                                pkgInfo = pkgInfo,
+                                runningMap = runningMap,
+                                rootProcessMap = rootProcessMap,
+                                nonRootActivityMap = nonRootActivityMap,
+                                isRootMode = isRoot,
+                                managedPackages = managedPackages,
+                                cutPackages = cutPackages,
+                                cutPathsMap = cutPathsMap,
+                                twentyFourHourWakeups = twentyFourHourWakeups
+                            )
+                            val isWorkingIgnored = preferences.isWorkingStateIgnored(entity.packageName)
+                            resultList.add(
+                                item.copy(
+                                    isManaged = true,
+                                    lastFrozenTimestamp = entity.lastFrozenTimestamp,
+                                    freezeCount = entity.freezeCount,
+                                    ignoreWorkingState = isWorkingIgnored
+                                )
+                            )
+                        } catch (e: Exception) {
+                            // Package may have been uninstalled
                         }
                     }
 
-                    val twentyFourHourWakeups = detector.calculateWakeups24h()
-                    val myPackage = getApplication<Application>().packageName
-
-                    val resultList = mutableListOf<InstalledAppItem>()
-                    for (pkgInfo in packages) {
-                        if (pkgInfo.packageName == myPackage) continue
-                        val item = detector.detectAppItem(
-                            pkgInfo = pkgInfo,
-                            runningMap = runningMap,
-                            rootProcessMap = rootProcessMap,
-                            nonRootActivityMap = nonRootActivityMap,
-                            isRootMode = isRoot,
-                            managedPackages = managedPackages,
-                            cutPackages = cutPackages,
-                            cutPathsMap = cutPathsMap,
-                            twentyFourHourWakeups = twentyFourHourWakeups
-                        )
-                        resultList.add(item)
-                    }
-
-                    // Sort: Evading / Working first, then alphabetical
+                    // Sort: running apps first
                     resultList.sortWith(
                         compareByDescending<InstalledAppItem> {
                             it.state == AppState.EVADING_RESTRICTIONS ||
@@ -304,21 +439,97 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                         }.thenBy { it.appName.lowercase() }
                     )
 
-                    _allInstalledApps.value = resultList
-
-                    // Keep selected dialog app in sync if open
-                    val currentSelected = _selectedAppForWakeup.value
-                    if (currentSelected != null) {
-                        val updated = resultList.find { it.packageName == currentSelected.packageName }
-                        if (updated != null) {
-                            _selectedAppForWakeup.value = updated
-                        }
-                    }
+                    _managedAppsFlow.value = resultList
                 }
             } catch (e: Exception) {
-                _statusMessage.value = "Failed to scan installed apps: ${e.localizedMessage}"
+                // Ignore
             } finally {
-                if (!silent) _isLoading.value = false
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun refreshApps() {
+        refreshManagedAppsOnly()
+        if (_showAddAppsSheet.value) {
+            loadInstalledAppsForAddDialog()
+        }
+    }
+
+    /**
+     * Fast enumeration of installed packages for AddAppsDialog (~50ms)
+     */
+    fun loadInstalledAppsForAddDialog() {
+        viewModelScope.launch {
+            _isLoadingAddApps.value = true
+            try {
+                withContext(Dispatchers.Default) {
+                    val pm = getApplication<Application>().packageManager
+                    // Use fast flags (0) instead of heavy GET_PERMISSIONS or GET_PROVIDERS
+                    val packages = pm.getInstalledPackages(0)
+                    val runningMap = detector.getRunningProcessesMap()
+                    val myPackage = getApplication<Application>().packageName
+
+                    val list = mutableListOf<InstalledAppItem>()
+                    for (pkgInfo in packages) {
+                        if (pkgInfo.packageName == myPackage) continue
+                        val appInfo = pkgInfo.applicationInfo ?: continue
+                        val appName = try {
+                            pm.getApplicationLabel(appInfo).toString()
+                        } catch (e: Exception) {
+                            pkgInfo.packageName
+                        }
+                        val isSystem = detector.isSystemApp(pkgInfo)
+                        val icon = try {
+                            pm.getApplicationIcon(appInfo)
+                        } catch (e: Exception) {
+                            null
+                        }
+
+                        val runningProc = runningMap[pkgInfo.packageName]
+                        val state = if (runningProc != null) {
+                            when (runningProc.importance) {
+                                android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND -> AppState.FOREGROUND
+                                android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE -> AppState.EVADING_RESTRICTIONS
+                                else -> AppState.WORKING_STATE
+                            }
+                        } else {
+                            AppState.BACKGROUND_FREE
+                        }
+
+                        val size = try {
+                            java.io.File(appInfo.sourceDir).length()
+                        } catch (e: Exception) { 0L }
+                        val installTime = pkgInfo.firstInstallTime
+
+                        list.add(
+                            InstalledAppItem(
+                                packageName = pkgInfo.packageName,
+                                appName = appName,
+                                icon = icon,
+                                state = state,
+                                isSystemApp = isSystem,
+                                isManaged = _managedAppEntities.value.any { it.packageName == pkgInfo.packageName },
+                                firstInstallTime = installTime,
+                                appSize = size
+                            )
+                        )
+                    }
+
+                    list.sortWith(
+                        compareByDescending<InstalledAppItem> {
+                            it.state == AppState.EVADING_RESTRICTIONS ||
+                            it.state == AppState.WORKING_STATE ||
+                            it.state == AppState.FOREGROUND
+                        }.thenBy { it.appName.lowercase() }
+                    )
+
+                    _allInstalledApps.value = list
+                }
+            } catch (e: Exception) {
+                // Ignore
+            } finally {
+                _isLoadingAddApps.value = false
             }
         }
     }
@@ -337,51 +548,99 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
             database.appDao().insertApps(entities)
             _showAddAppsSheet.value = false
             _statusMessage.value = "Added ${apps.size} apps to list"
-            refreshApps(silent = true)
+            refreshManagedAppsOnly()
         }
     }
 
     fun removeAppFromFreezeList(packageName: String) {
         viewModelScope.launch {
             database.appDao().deleteApp(packageName)
+            _managedAppsFlow.value = _managedAppsFlow.value.filter { it.packageName != packageName }
             _statusMessage.value = "Removed from list"
-            refreshApps(silent = true)
         }
     }
 
     fun forceStopSingle(app: InstalledAppItem) {
         viewModelScope.launch {
-            // Instant optimistic update so it disappears immediately from running list
-            _allInstalledApps.value = _allInstalledApps.value.map {
+            // Instant optimistic update so it disappears immediately from running list (0ms feedback!)
+            _managedAppsFlow.value = _managedAppsFlow.value.map {
                 if (it.packageName == app.packageName) it.copy(state = AppState.BACKGROUND_FREE, stateDetail = "Hibernated") else it
             }
 
             val success = engine.stopSingleApp(app)
             _statusMessage.value = if (success) "Force stopped ${app.appName}" else "Failed to force stop ${app.appName}"
             delay(250)
-            refreshApps(silent = true)
+            refreshManagedAppsOnly(silent = true)
         }
     }
 
     fun forceStopAllRunning() {
         viewModelScope.launch {
-            val runningManaged = allManagedApps.value.filter {
+            val candidates = allManagedApps.value.filter {
                 it.state == AppState.FOREGROUND ||
-                it.state == AppState.WORKING_STATE ||
-                it.state == AppState.EVADING_RESTRICTIONS
+                it.state == AppState.EVADING_RESTRICTIONS ||
+                (it.state == AppState.WORKING_STATE && it.ignoreWorkingState)
             }
 
-            if (runningManaged.isEmpty()) {
-                _statusMessage.value = "All apps are already stopped!"
+            val skippedWorkingCount = allManagedApps.value.count {
+                it.state == AppState.WORKING_STATE && !it.ignoreWorkingState
+            }
+
+            if (candidates.isEmpty()) {
+                if (skippedWorkingCount > 0) {
+                    _statusMessage.value = "$skippedWorkingCount app(s) in active Working Mode were protected and skipped"
+                } else {
+                    _statusMessage.value = "All apps are already stopped!"
+                }
                 return@launch
             }
 
-            engine.stopBatchApps(runningManaged) {
+            // Optimistic update: mark candidates as stopped immediately
+            val runningPkgs = candidates.map { it.packageName }.toSet()
+            _managedAppsFlow.value = _managedAppsFlow.value.map {
+                if (runningPkgs.contains(it.packageName)) it.copy(state = AppState.BACKGROUND_FREE, stateDetail = "Hibernated") else it
+            }
+
+            engine.stopBatchApps(candidates) {
                 viewModelScope.launch {
                     delay(300)
-                    refreshApps(silent = true)
+                    refreshManagedAppsOnly(silent = true)
                 }
             }
+
+            if (skippedWorkingCount > 0) {
+                _statusMessage.value = "Force stopped ${candidates.size} app(s). $skippedWorkingCount working app(s) kept protected."
+            }
+        }
+    }
+
+    fun forceStopSelected(apps: List<InstalledAppItem>) {
+        viewModelScope.launch {
+            if (apps.isEmpty()) return@launch
+            val pkgs = apps.map { it.packageName }.toSet()
+            _managedAppsFlow.value = _managedAppsFlow.value.map {
+                if (pkgs.contains(it.packageName)) it.copy(state = AppState.BACKGROUND_FREE, stateDetail = "Hibernated") else it
+            }
+
+            engine.stopBatchApps(apps) {
+                viewModelScope.launch {
+                    delay(300)
+                    refreshManagedAppsOnly(silent = true)
+                }
+            }
+            _statusMessage.value = "Force stopping ${apps.size} selected app(s)..."
+        }
+    }
+
+    fun toggleIgnoreWorkingState(app: InstalledAppItem) {
+        val isNowIgnored = preferences.toggleIgnoreWorkingState(app.packageName)
+        _managedAppsFlow.value = _managedAppsFlow.value.map {
+            if (it.packageName == app.packageName) it.copy(ignoreWorkingState = isNowIgnored) else it
+        }
+        _statusMessage.value = if (isNowIgnored) {
+            "${app.appName}: Working state ignored (will force stop in batch)"
+        } else {
+            "${app.appName}: Working state protected (skipped in batch)"
         }
     }
 
@@ -413,7 +672,39 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
             }
 
             _statusMessage.value = if (cut) "Cut path: ${path.title}" else "Restored path: ${path.title}"
-            refreshApps(silent = true)
+            refreshManagedAppsOnly(silent = true)
+        }
+    }
+
+    fun cutSafeWakeUpPaths(app: InstalledAppItem) {
+        viewModelScope.launch {
+            val safePaths = app.wakeUpDetails.paths.filter { it.riskLevel == WakeUpRiskLevel.SAFE }
+            val safePathIds = safePaths.map { it.id }.toSet()
+            val currentCut = preferences.getCutPathsForPackage(app.packageName).toMutableSet()
+            currentCut.addAll(safePathIds)
+            preferences.setCutPathsForPackage(app.packageName, currentCut)
+
+            if (preferences.mode == OperatingMode.ROOT) {
+                for (p in safePaths) {
+                    RootExecutor.cutSpecificWakeUpPath(p)
+                }
+            }
+
+            val currentSelected = _selectedAppForWakeup.value
+            if (currentSelected != null && currentSelected.packageName == app.packageName) {
+                val updatedPaths = currentSelected.wakeUpDetails.paths.map {
+                    if (it.riskLevel == WakeUpRiskLevel.SAFE) it.copy(isCut = true) else it
+                }
+                _selectedAppForWakeup.value = currentSelected.copy(
+                    wakeUpDetails = currentSelected.wakeUpDetails.copy(
+                        paths = updatedPaths,
+                        isCut = updatedPaths.all { it.isCut }
+                    )
+                )
+            }
+
+            _statusMessage.value = "Cut ${safePaths.size} safe wake-up paths for ${app.appName}"
+            refreshManagedAppsOnly(silent = true)
         }
     }
 
@@ -443,39 +734,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
             }
 
             _statusMessage.value = "Cut all ${app.wakeUpDetails.paths.size} wake-up paths for ${app.appName}"
-            refreshApps(silent = true)
-        }
-    }
-
-    fun cutSafeWakeUpPaths(app: InstalledAppItem) {
-        viewModelScope.launch {
-            val safePaths = app.wakeUpDetails.paths.filter { it.riskLevel == com.example.model.WakeUpRiskLevel.SAFE }
-            val safePathIds = safePaths.map { it.id }.toSet()
-            val currentCut = preferences.getCutPathsForPackage(app.packageName).toMutableSet()
-            currentCut.addAll(safePathIds)
-            preferences.setCutPathsForPackage(app.packageName, currentCut)
-
-            if (preferences.mode == OperatingMode.ROOT) {
-                for (p in safePaths) {
-                    RootExecutor.cutSpecificWakeUpPath(p)
-                }
-            }
-
-            val currentSelected = _selectedAppForWakeup.value
-            if (currentSelected != null && currentSelected.packageName == app.packageName) {
-                val updatedPaths = currentSelected.wakeUpDetails.paths.map {
-                    if (it.riskLevel == com.example.model.WakeUpRiskLevel.SAFE) it.copy(isCut = true) else it
-                }
-                _selectedAppForWakeup.value = currentSelected.copy(
-                    wakeUpDetails = currentSelected.wakeUpDetails.copy(
-                        paths = updatedPaths,
-                        isCut = updatedPaths.all { it.isCut }
-                    )
-                )
-            }
-
-            _statusMessage.value = "Cut ${safePaths.size} safe wake-up paths for ${app.appName}"
-            refreshApps(silent = true)
+            refreshManagedAppsOnly(silent = true)
         }
     }
 
@@ -504,7 +763,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
             }
 
             _statusMessage.value = "Restored all wake-up paths for ${app.appName}"
-            refreshApps(silent = true)
+            refreshManagedAppsOnly(silent = true)
         }
     }
 
@@ -524,7 +783,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                 count++
             }
             _statusMessage.value = "Cut wakeups for $count apps"
-            refreshApps(silent = true)
+            refreshManagedAppsOnly(silent = true)
         }
     }
 

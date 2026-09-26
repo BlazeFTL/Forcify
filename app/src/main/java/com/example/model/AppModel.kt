@@ -74,6 +74,15 @@ data class WakeUpDetails(
     val triggers: List<WakeUpPath> get() = paths
 }
 
+enum class AppSortOption(val label: String) {
+    NAME_ASC("Name (A → Z)"),
+    NAME_DESC("Name (Z → A)"),
+    INSTALL_TIME_DESC("Install Time (Newest)"),
+    INSTALL_TIME_ASC("Install Time (Oldest)"),
+    SIZE_DESC("App Size (Largest)"),
+    SIZE_ASC("App Size (Smallest)")
+}
+
 data class InstalledAppItem(
     val packageName: String,
     val appName: String,
@@ -87,7 +96,10 @@ data class InstalledAppItem(
     val isSystemApp: Boolean = false,
     val isManaged: Boolean = false,
     val lastFrozenTimestamp: Long = 0L,
-    val freezeCount: Int = 0
+    val freezeCount: Int = 0,
+    val firstInstallTime: Long = 0L,
+    val appSize: Long = 0L,
+    val ignoreWorkingState: Boolean = false
 )
 
 data class BatchFreezeProgress(

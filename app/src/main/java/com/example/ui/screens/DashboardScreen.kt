@@ -1,9 +1,12 @@
 package com.example.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCut
@@ -35,11 +39,14 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.StopCircle
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -96,9 +103,11 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
     val pendingApps by viewModel.pendingApps.collectAsState()
     val allInstalledApps by viewModel.allInstalledApps.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
+    val isLoadingAddApps by viewModel.isLoadingAddApps.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val showAddAppsSheet by viewModel.showAddAppsSheet.collectAsState()
     val hideSystemAppsInAddList by viewModel.hideSystemAppsInAddList.collectAsState()
+    val addAppSortOption by viewModel.addAppSortOption.collectAsState()
     val selectedAppForWakeup by viewModel.selectedAppForWakeup.collectAsState()
     val batchProgress by viewModel.batchProgress.collectAsState()
     val statusMessage by viewModel.statusMessage.collectAsState()
@@ -108,14 +117,20 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
     var showModeDialog by remember { mutableStateOf(false) }
     var isSearchExpanded by remember { mutableStateOf(false) }
 
+    // Multi-select for batch stopping requested by user
+    var selectedPackagesForBatchStop by remember { mutableStateOf(setOf<String>()) }
+    val isMultiSelectMode = selectedPackagesForBatchStop.isNotEmpty()
+
+    BackHandler(enabled = isMultiSelectMode) {
+        selectedPackagesForBatchStop = emptySet()
+    }
+
     LaunchedEffect(statusMessage) {
         statusMessage?.let {
             snackbarHostState.showSnackbar(it)
             viewModel.clearStatusMessage()
         }
     }
-
-    val runningCount = pendingApps.size
 
     // Apply search filter strictly to running apps only
     val filteredRunning = remember(pendingApps, searchQuery) {
@@ -127,194 +142,287 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
         }
     }
 
+    val stoppableCount = remember(pendingApps) {
+        pendingApps.count {
+            it.state == AppState.FOREGROUND ||
+            it.state == AppState.EVADING_RESTRICTIONS ||
+            (it.state == AppState.WORKING_STATE && it.ignoreWorkingState)
+        }
+    }
+
+    val protectedWorkingCount = remember(pendingApps) {
+        pendingApps.count {
+            it.state == AppState.WORKING_STATE && !it.ignoreWorkingState
+        }
+    }
+
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(MaterialTheme.colorScheme.primary),
-                            contentAlignment = Alignment.Center
+            if (isMultiSelectMode) {
+                // Contextual Selection TopBar
+                TopAppBar(
+                    navigationIcon = {
+                        IconButton(onClick = { selectedPackagesForBatchStop = emptySet() }) {
+                            Icon(imageVector = Icons.Default.Close, contentDescription = "Cancel Selection")
+                        }
+                    },
+                    title = {
+                        Text(
+                            text = "${selectedPackagesForBatchStop.size} Selected",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    },
+                    actions = {
+                        val allSelected = filteredRunning.isNotEmpty() &&
+                            filteredRunning.all { selectedPackagesForBatchStop.contains(it.packageName) }
+                        TextButton(
+                            onClick = {
+                                selectedPackagesForBatchStop = if (allSelected) {
+                                    emptySet()
+                                } else {
+                                    filteredRunning.map { it.packageName }.toSet()
+                                }
+                            }
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Bolt,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(20.dp)
+                            Text(
+                                text = if (allSelected) "Deselect All" else "Select All",
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
                             )
                         }
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "ForCify",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp,
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        // Mode Indicator Pill (Root / Non-Root)
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(
-                                    if (operatingMode == OperatingMode.ROOT)
-                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                                    else
-                                        StateFree.copy(alpha = 0.15f)
-                                )
-                                .border(
-                                    width = 1.dp,
-                                    color = if (operatingMode == OperatingMode.ROOT)
-                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
-                                    else
-                                        StateFree.copy(alpha = 0.3f),
-                                    shape = RoundedCornerShape(12.dp)
-                                )
-                                .clickable { showModeDialog = true }
-                                .padding(horizontal = 8.dp, vertical = 3.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                )
+            } else {
+                TopAppBar(
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MaterialTheme.colorScheme.primary),
+                                contentAlignment = Alignment.Center
+                            ) {
                                 Icon(
-                                    imageVector = if (operatingMode == OperatingMode.ROOT) Icons.Default.Bolt else Icons.Default.Shield,
+                                    imageVector = Icons.Default.Bolt,
                                     contentDescription = null,
-                                    tint = if (operatingMode == OperatingMode.ROOT) MaterialTheme.colorScheme.primary else StateFree,
-                                    modifier = Modifier.size(12.dp)
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
                                 )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = if (operatingMode == OperatingMode.ROOT) "Root" else "Non-Root",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = if (operatingMode == OperatingMode.ROOT) MaterialTheme.colorScheme.primary else StateFree
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = "ForCify",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 20.sp,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            // Mode Indicator Pill (Root / Non-Root)
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(
+                                        if (operatingMode == OperatingMode.ROOT)
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                        else
+                                            StateFree.copy(alpha = 0.15f)
+                                    )
+                                    .border(
+                                        width = 1.dp,
+                                        color = if (operatingMode == OperatingMode.ROOT)
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+                                        else
+                                            StateFree.copy(alpha = 0.3f),
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                    .clickable { showModeDialog = true }
+                                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = if (operatingMode == OperatingMode.ROOT) Icons.Default.Bolt else Icons.Default.Shield,
+                                        contentDescription = null,
+                                        tint = if (operatingMode == OperatingMode.ROOT) MaterialTheme.colorScheme.primary else StateFree,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = if (operatingMode == OperatingMode.ROOT) "Root" else "Non-Root",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (operatingMode == OperatingMode.ROOT) MaterialTheme.colorScheme.primary else StateFree
+                                    )
+                                }
+                            }
+                        }
+                    },
+                    actions = {
+                        // Search toggle button
+                        IconButton(
+                            onClick = {
+                                isSearchExpanded = !isSearchExpanded
+                                if (!isSearchExpanded) viewModel.setSearchQuery("")
+                            }
+                        ) {
+                            Icon(imageVector = Icons.Default.Search, contentDescription = "Search Apps")
+                        }
+
+                        // THE "+" BUTTON ON TOP REQUESTED BY USER!
+                        IconButton(
+                            onClick = { viewModel.openAddApps() },
+                            modifier = Modifier
+                                .testTag("add_apps_top_button")
+                                .padding(end = 2.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Add,
+                                    contentDescription = "Add Apps to Freeze List",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
-                    }
-                },
-                actions = {
-                    // Search toggle button
-                    IconButton(
-                        onClick = {
-                            isSearchExpanded = !isSearchExpanded
-                            if (!isSearchExpanded) viewModel.setSearchQuery("")
-                        }
-                    ) {
-                        Icon(imageVector = Icons.Default.Search, contentDescription = "Search Apps")
-                    }
 
-                    // THE "+" BUTTON ON TOP REQUESTED BY USER!
-                    IconButton(
-                        onClick = { viewModel.openAddApps() },
-                        modifier = Modifier
-                            .testTag("add_apps_top_button")
-                            .padding(end = 2.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(34.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primary),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Add,
-                                contentDescription = "Add Apps to Freeze List",
-                                tint = Color.White,
-                                modifier = Modifier.size(20.dp)
-                            )
+                        // Three-dot menu: Contains Refresh, Cut All Wakeups, Switch Mode, Re-run Setup
+                        Box {
+                            IconButton(onClick = { showMenu = true }) {
+                                Icon(imageVector = Icons.Default.MoreVert, contentDescription = "Options")
+                            }
+                            DropdownMenu(
+                                expanded = showMenu,
+                                onDismissRequest = { showMenu = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Refresh Status") },
+                                    onClick = {
+                                        showMenu = false
+                                        viewModel.refreshApps()
+                                    },
+                                    leadingIcon = {
+                                        Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Cut All Wakeups") },
+                                    onClick = {
+                                        showMenu = false
+                                        viewModel.cutAllActiveWakeups()
+                                    },
+                                    leadingIcon = {
+                                        Icon(imageVector = Icons.Default.ContentCut, contentDescription = null)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Switch Operating Mode") },
+                                    onClick = {
+                                        showMenu = false
+                                        showModeDialog = true
+                                    },
+                                    leadingIcon = {
+                                        Icon(imageVector = Icons.Default.Bolt, contentDescription = null)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Re-run Setup Wizard") },
+                                    onClick = {
+                                        showMenu = false
+                                        viewModel.resetSetup()
+                                    },
+                                    leadingIcon = {
+                                        Icon(imageVector = Icons.Default.Settings, contentDescription = null)
+                                    }
+                                )
+                            }
                         }
-                    }
-
-                    // Three-dot menu: Contains Refresh, Cut All Wakeups, Switch Mode, Re-run Setup
-                    Box {
-                        IconButton(onClick = { showMenu = true }) {
-                            Icon(imageVector = Icons.Default.MoreVert, contentDescription = "Options")
-                        }
-                        DropdownMenu(
-                            expanded = showMenu,
-                            onDismissRequest = { showMenu = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Refresh Status") },
-                                onClick = {
-                                    showMenu = false
-                                    viewModel.refreshApps()
-                                },
-                                leadingIcon = {
-                                    Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Cut All Wakeups") },
-                                onClick = {
-                                    showMenu = false
-                                    viewModel.cutAllActiveWakeups()
-                                },
-                                leadingIcon = {
-                                    Icon(imageVector = Icons.Default.ContentCut, contentDescription = null)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Switch Operating Mode") },
-                                onClick = {
-                                    showMenu = false
-                                    showModeDialog = true
-                                },
-                                leadingIcon = {
-                                    Icon(imageVector = Icons.Default.Bolt, contentDescription = null)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Re-run Setup Wizard") },
-                                onClick = {
-                                    showMenu = false
-                                    viewModel.resetSetup()
-                                },
-                                leadingIcon = {
-                                    Icon(imageVector = Icons.Default.Settings, contentDescription = null)
-                                }
-                            )
-                        }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    )
                 )
-            )
+            }
         },
-        // THE BOTTOM RIGHT FORCE STOP BUTTON REQUESTED BY USER!
+        // THE BOTTOM RIGHT FORCE STOP BUTTON WITH MULTI-SELECT SUPPORT!
         floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = { viewModel.forceStopAllRunning() },
-                containerColor = if (runningCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                contentColor = if (runningCount > 0) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-                elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp),
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .testTag("force_stop_fab_button")
-                    .navigationBarsPadding()
-                    .padding(bottom = 12.dp, end = 8.dp),
-                icon = {
-                    Icon(
-                        imageVector = Icons.Default.PowerSettingsNew,
-                        contentDescription = "Force Stop Button",
-                        modifier = Modifier.size(22.dp)
-                    )
-                },
-                text = {
-                    Text(
-                        text = if (runningCount > 0) "Force Stop ($runningCount)" else "All Hibernated ✓",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp
-                    )
-                }
-            )
+            if (isMultiSelectMode) {
+                ExtendedFloatingActionButton(
+                    onClick = {
+                        val selectedApps = pendingApps.filter { selectedPackagesForBatchStop.contains(it.packageName) }
+                        viewModel.forceStopSelected(selectedApps)
+                        selectedPackagesForBatchStop = emptySet()
+                    },
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = Color.White,
+                    elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .testTag("force_stop_selected_fab")
+                        .navigationBarsPadding()
+                        .padding(bottom = 12.dp, end = 8.dp),
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Default.PowerSettingsNew,
+                            contentDescription = "Force Stop Selected",
+                            modifier = Modifier.size(22.dp)
+                        )
+                    },
+                    text = {
+                        Text(
+                            text = "Force Stop Selected (${selectedPackagesForBatchStop.size})",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                    }
+                )
+            } else {
+                val hasStoppable = stoppableCount > 0
+                ExtendedFloatingActionButton(
+                    onClick = { viewModel.forceStopAllRunning() },
+                    containerColor = if (hasStoppable) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = if (hasStoppable) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                    elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .testTag("force_stop_fab_button")
+                        .navigationBarsPadding()
+                        .padding(bottom = 12.dp, end = 8.dp),
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Default.PowerSettingsNew,
+                            contentDescription = "Force Stop Button",
+                            modifier = Modifier.size(22.dp)
+                        )
+                    },
+                    text = {
+                        val fabLabel = when {
+                            stoppableCount > 0 -> "Force Stop ($stoppableCount)"
+                            protectedWorkingCount > 0 -> "Working Protected ($protectedWorkingCount)"
+                            else -> "All Hibernated ✓"
+                        }
+                        Text(
+                            text = fabLabel,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                    }
+                )
+            }
         }
     ) { innerPadding ->
         Column(
@@ -323,7 +431,7 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                 .padding(innerPadding)
         ) {
             // Optional Search Bar with "X" clear button
-            AnimatedVisibility(visible = isSearchExpanded) {
+            AnimatedVisibility(visible = isSearchExpanded && !isMultiSelectMode) {
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { viewModel.setSearchQuery(it) },
@@ -393,25 +501,48 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "NOT HIBERNATING AUTOMATICALLY (${filteredRunning.size})",
+                                text = if (isMultiSelectMode) "LONG PRESS OR TAP APPS TO SELECT" else "NOT HIBERNATING AUTOMATICALLY (${filteredRunning.size})",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            Text(
-                                text = "${allManagedApps.size} Managed",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.SemiBold
-                            )
+                            if (!isMultiSelectMode && protectedWorkingCount > 0) {
+                                Text(
+                                    text = "$protectedWorkingCount Working Protected",
+                                    fontSize = 11.sp,
+                                    color = StateWorking,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            } else {
+                                Text(
+                                    text = "${allManagedApps.size} Managed",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
                         }
                     }
                     items(filteredRunning, key = { it.packageName }) { app ->
+                        val isSelected = selectedPackagesForBatchStop.contains(app.packageName)
                         GreenifyStyleAppCard(
                             app = app,
+                            isSelectionMode = isMultiSelectMode,
+                            isSelected = isSelected,
+                            onToggleSelect = {
+                                selectedPackagesForBatchStop = if (isSelected) {
+                                    selectedPackagesForBatchStop - app.packageName
+                                } else {
+                                    selectedPackagesForBatchStop + app.packageName
+                                }
+                            },
+                            onLongClick = {
+                                selectedPackagesForBatchStop = selectedPackagesForBatchStop + app.packageName
+                            },
                             onForceStop = { viewModel.forceStopSingle(app) },
                             onOpenWakeup = { viewModel.selectAppForWakeup(app) },
-                            onRemove = { viewModel.removeAppFromFreezeList(app.packageName) }
+                            onRemove = { viewModel.removeAppFromFreezeList(app.packageName) },
+                            onToggleIgnoreWorking = { viewModel.toggleIgnoreWorkingState(app) }
                         )
                     }
                 }
@@ -419,14 +550,16 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
         }
     }
 
-    // Modal Add Apps Sheet with Hide System Apps inside Three-Dot
+    // Modal Add Apps Sheet with Sort options and Hide System Apps inside Three-Dot
     if (showAddAppsSheet) {
         AddAppsDialog(
             allApps = allInstalledApps,
             managedPackageNames = allManagedApps.map { it.packageName }.toSet(),
             hideSystemApps = hideSystemAppsInAddList,
             onToggleHideSystemApps = { viewModel.setHideSystemAppsInAddList(it) },
-            isLoading = isLoading,
+            sortOption = addAppSortOption,
+            onSelectSortOption = { viewModel.setAddAppSortOption(it) },
+            isLoading = isLoadingAddApps,
             onDismiss = { viewModel.closeAddApps() },
             onConfirmAdd = { selected ->
                 viewModel.addAppsToFreezeList(selected)
@@ -480,14 +613,25 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
 }
 
 /**
- * Greenify-style app card: App name on line 1, exact state and details on line 2, stop action on right
+ * Greenify-style app card:
+ * - App name and status
+ * - Working Mode protection badge & "Working Mode Ignored" indicator
+ * - Stop action on right
+ * - Long press to multi-select apps for batch force stop
+ * - 3-Dot menu with Ignore Working Mode toggle
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun GreenifyStyleAppCard(
     app: InstalledAppItem,
+    isSelectionMode: Boolean,
+    isSelected: Boolean,
+    onToggleSelect: () -> Unit,
+    onLongClick: () -> Unit,
     onForceStop: () -> Unit,
     onOpenWakeup: () -> Unit,
-    onRemove: () -> Unit
+    onRemove: () -> Unit,
+    onToggleIgnoreWorking: () -> Unit
 ) {
     var showItemMenu by remember { mutableStateOf(false) }
 
@@ -510,9 +654,27 @@ private fun GreenifyStyleAppCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
-            .clickable(onClick = onOpenWakeup),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            .border(
+                width = if (isSelected) 2.dp else 1.dp,
+                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                shape = RoundedCornerShape(12.dp)
+            )
+            .combinedClickable(
+                onClick = {
+                    if (isSelectionMode) {
+                        onToggleSelect()
+                    } else {
+                        onOpenWakeup()
+                    }
+                },
+                onLongClick = onLongClick
+            ),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected)
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+            else
+                MaterialTheme.colorScheme.surface
+        ),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Row(
@@ -521,18 +683,30 @@ private fun GreenifyStyleAppCard(
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            if (isSelectionMode) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onToggleSelect() },
+                    colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary),
+                    modifier = Modifier.padding(end = 4.dp)
+                )
+            }
+
             AppIconImage(drawable = app.icon, appName = app.appName, size = 44.dp)
             Spacer(modifier = Modifier.width(12.dp))
 
             // Greenify Style Title & Subtitle
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = app.appName,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = app.appName,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                }
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = stateText,
@@ -549,64 +723,154 @@ private fun GreenifyStyleAppCard(
                         maxLines = 1
                     )
                 }
+
+                // Working State Protection / Ignored Status Display
+                if (app.state == AppState.WORKING_STATE) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    if (app.ignoreWorkingState) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color(0xFFFEF3C7))
+                                .border(1.dp, Color(0xFFF59E0B), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = Color(0xFFD97706),
+                                    modifier = Modifier.size(11.dp)
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = "Working Mode Ignored",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFB45309)
+                                )
+                            }
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f))
+                                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Shield,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(11.dp)
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = "Protected (Working Mode)",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                } else if (app.ignoreWorkingState) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color(0xFFFEF3C7))
+                            .border(1.dp, Color(0xFFF59E0B), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = "Working Mode Ignored",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFB45309)
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Stop Button on Right
-            Button(
-                onClick = onForceStop,
-                modifier = Modifier
-                    .height(34.dp)
-                    .testTag("force_stop_${app.packageName}"),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                ),
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.StopCircle,
-                    contentDescription = null,
-                    modifier = Modifier.size(15.dp)
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    text = "Stop",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            Box {
-                IconButton(onClick = { showItemMenu = true }) {
+            // Stop Button on Right (single stop)
+            if (!isSelectionMode) {
+                Button(
+                    onClick = onForceStop,
+                    modifier = Modifier
+                        .height(34.dp)
+                        .testTag("force_stop_${app.packageName}"),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp)
+                ) {
                     Icon(
-                        imageVector = Icons.Default.MoreVert,
-                        contentDescription = "Options",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        imageVector = Icons.Default.StopCircle,
+                        contentDescription = null,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Stop",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
-                DropdownMenu(
-                    expanded = showItemMenu,
-                    onDismissRequest = { showItemMenu = false }
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("Inspect Wake-Ups") },
-                        onClick = {
-                            showItemMenu = false
-                            onOpenWakeup()
-                        },
-                        leadingIcon = { Icon(imageVector = Icons.Default.Bolt, contentDescription = null) }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Remove from List") },
-                        onClick = {
-                            showItemMenu = false
-                            onRemove()
-                        },
-                        leadingIcon = { Icon(imageVector = Icons.Default.Delete, contentDescription = null) }
-                    )
+
+                Box {
+                    IconButton(onClick = { showItemMenu = true }) {
+                        Icon(
+                            imageVector = Icons.Default.MoreVert,
+                            contentDescription = "Options",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = showItemMenu,
+                        onDismissRequest = { showItemMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Inspect Wake-Ups") },
+                            onClick = {
+                                showItemMenu = false
+                                onOpenWakeup()
+                            },
+                            leadingIcon = { Icon(imageVector = Icons.Default.Bolt, contentDescription = null) }
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = if (app.ignoreWorkingState) "Protect Working Mode" else "Ignore Working Mode"
+                                )
+                            },
+                            onClick = {
+                                showItemMenu = false
+                                onToggleIgnoreWorking()
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = if (app.ignoreWorkingState) Icons.Default.Shield else Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = if (app.ignoreWorkingState) MaterialTheme.colorScheme.primary else Color(0xFFEA580C)
+                                )
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Remove from List") },
+                            onClick = {
+                                showItemMenu = false
+                                onRemove()
+                            },
+                            leadingIcon = { Icon(imageVector = Icons.Default.Delete, contentDescription = null) }
+                        )
+                    }
                 }
             }
         }

@@ -64,6 +64,40 @@ class PureStopPreferences(context: Context) {
         setCutPathsForPackage(packageName, current)
     }
 
+    var addAppSortOption: com.example.model.AppSortOption
+        get() {
+            val name = prefs.getString("add_app_sort_option", com.example.model.AppSortOption.NAME_ASC.name)
+            return try {
+                com.example.model.AppSortOption.valueOf(name ?: com.example.model.AppSortOption.NAME_ASC.name)
+            } catch (e: Exception) {
+                com.example.model.AppSortOption.NAME_ASC
+            }
+        }
+        set(value) {
+            prefs.edit().putString("add_app_sort_option", value.name).apply()
+        }
+
+    fun getIgnoredWorkingStatePackages(): Set<String> {
+        return prefs.getStringSet("ignored_working_state_pkgs", emptySet()) ?: emptySet()
+    }
+
+    fun isWorkingStateIgnored(packageName: String): Boolean {
+        return getIgnoredWorkingStatePackages().contains(packageName)
+    }
+
+    fun toggleIgnoreWorkingState(packageName: String): Boolean {
+        val current = getIgnoredWorkingStatePackages().toMutableSet()
+        val newState = if (current.contains(packageName)) {
+            current.remove(packageName)
+            false
+        } else {
+            current.add(packageName)
+            true
+        }
+        prefs.edit().putStringSet("ignored_working_state_pkgs", current).apply()
+        return newState
+    }
+
     fun resetSetup() {
         prefs.edit()
             .putBoolean("is_setup_completed", false)

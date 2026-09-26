@@ -56,6 +56,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material3.HorizontalDivider
+import com.example.model.AppSortOption
 import com.example.model.AppState
 import com.example.model.InstalledAppItem
 import com.example.ui.components.AppIconImage
@@ -74,6 +76,8 @@ fun AddAppsDialog(
     managedPackageNames: Set<String>,
     hideSystemApps: Boolean,
     onToggleHideSystemApps: (Boolean) -> Unit,
+    sortOption: AppSortOption,
+    onSelectSortOption: (AppSortOption) -> Unit,
     isLoading: Boolean,
     onDismiss: () -> Unit,
     onConfirmAdd: (List<InstalledAppItem>) -> Unit
@@ -84,9 +88,9 @@ fun AddAppsDialog(
     var showOptionsMenu by remember { mutableStateOf(false) }
     val selectedPackages = remember { mutableStateOf(mutableSetOf<String>()) }
 
-    // Filter candidate apps (exclude already managed apps and apply system filter)
-    val candidateApps = remember(allApps, managedPackageNames, searchQuery, currentFilter, hideSystemApps) {
-        allApps.filter { !managedPackageNames.contains(it.packageName) }.filter { item ->
+    // Filter candidate apps (exclude already managed apps and apply system filter & sorting)
+    val candidateApps = remember(allApps, managedPackageNames, searchQuery, currentFilter, hideSystemApps, sortOption) {
+        val filtered = allApps.filter { !managedPackageNames.contains(it.packageName) }.filter { item ->
             // System app filter
             if (hideSystemApps && item.isSystemApp) return@filter false
 
@@ -103,6 +107,15 @@ fun AddAppsDialog(
             }
 
             matchesQuery && matchesFilter
+        }
+
+        when (sortOption) {
+            AppSortOption.NAME_ASC -> filtered.sortedBy { it.appName.lowercase() }
+            AppSortOption.NAME_DESC -> filtered.sortedByDescending { it.appName.lowercase() }
+            AppSortOption.INSTALL_TIME_DESC -> filtered.sortedByDescending { it.firstInstallTime }
+            AppSortOption.INSTALL_TIME_ASC -> filtered.sortedBy { it.firstInstallTime }
+            AppSortOption.SIZE_DESC -> filtered.sortedByDescending { it.appSize }
+            AppSortOption.SIZE_ASC -> filtered.sortedBy { it.appSize }
         }
     }
 
@@ -125,7 +138,7 @@ fun AddAppsDialog(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f, fill = false)) {
                     Text(
                         text = "Add Apps to Freeze List",
                         fontSize = 19.sp,
@@ -133,19 +146,23 @@ fun AddAppsDialog(
                         color = MaterialTheme.colorScheme.onBackground
                     )
                     Text(
-                        text = "${candidateApps.size} apps available" + if (hideSystemApps) " (System apps hidden)" else " (Including system apps)",
+                        text = "${candidateApps.size} apps available • ${sortOption.label}",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Three-dot options menu requested by user!
+                    IconButton(onClick = onDismiss) {
+                        Icon(imageVector = Icons.Default.Close, contentDescription = "Close")
+                    }
+
+                    // Three-dot options menu positioned to the right side of X
                     Box {
                         IconButton(onClick = { showOptionsMenu = true }) {
                             Icon(
                                 imageVector = Icons.Default.MoreVert,
-                                contentDescription = "Filter Options",
+                                contentDescription = "Options and Sorting",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -153,6 +170,49 @@ fun AddAppsDialog(
                             expanded = showOptionsMenu,
                             onDismissRequest = { showOptionsMenu = false }
                         ) {
+                            Text(
+                                text = "SORT APPLICATIONS",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                            )
+                            AppSortOption.values().forEach { option ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = option.label,
+                                            fontWeight = if (sortOption == option) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (sortOption == option) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                        )
+                                    },
+                                    onClick = {
+                                        showOptionsMenu = false
+                                        onSelectSortOption(option)
+                                    },
+                                    leadingIcon = {
+                                        if (sortOption == option) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                        } else {
+                                            Spacer(modifier = Modifier.size(24.dp))
+                                        }
+                                    }
+                                )
+                            }
+
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                            Text(
+                                text = "FILTER",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                            )
                             DropdownMenuItem(
                                 text = {
                                     Text(
@@ -173,10 +233,6 @@ fun AddAppsDialog(
                                 }
                             )
                         }
-                    }
-
-                    IconButton(onClick = onDismiss) {
-                        Icon(imageVector = Icons.Default.Close, contentDescription = "Close")
                     }
                 }
             }
