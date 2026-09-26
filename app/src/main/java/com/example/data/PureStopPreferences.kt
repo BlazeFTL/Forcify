@@ -46,6 +46,24 @@ class PureStopPreferences(context: Context) {
         get() = prefs.getBoolean("hide_system_apps_add_list", true)
         set(value) = prefs.edit().putBoolean("hide_system_apps_add_list", value).apply()
 
+    fun getCutPathsForPackage(packageName: String): Set<String> {
+        return prefs.getStringSet("cut_paths_$packageName", emptySet()) ?: emptySet()
+    }
+
+    fun setCutPathsForPackage(packageName: String, pathIds: Set<String>) {
+        prefs.edit().putStringSet("cut_paths_$packageName", pathIds).apply()
+    }
+
+    fun isPathCut(packageName: String, pathId: String): Boolean {
+        return getCutPathsForPackage(packageName).contains(pathId)
+    }
+
+    fun togglePathCut(packageName: String, pathId: String, cut: Boolean) {
+        val current = getCutPathsForPackage(packageName).toMutableSet()
+        if (cut) current.add(pathId) else current.remove(pathId)
+        setCutPathsForPackage(packageName, current)
+    }
+
     fun resetSetup() {
         prefs.edit()
             .putBoolean("is_setup_completed", false)

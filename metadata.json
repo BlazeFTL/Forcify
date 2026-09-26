@@ -1,6 +1,6 @@
 {
-  "name": "PureStop",
-  "description": "Modern app hibernation and force stop manager with Root and Non-Root modes, background restriction detection, and wake-up tracking control.",
+  "name": "ForCify",
+  "description": "Modern app hibernation and force stop manager with Root and Non-Root modes, granular wake-up path cutting, and instant process control.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

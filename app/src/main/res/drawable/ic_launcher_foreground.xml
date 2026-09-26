@@ -3,6 +3,6 @@
     <item
         android:width="66dp"
         android:height="66dp"
-        android:drawable="@drawable/app_icon_purestop_1790450861049"
+        android:drawable="@drawable/app_icon_forcify_1790456635884"
         android:gravity="center" />
 </layer-list>

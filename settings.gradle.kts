@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "PureStop"
+rootProject.name = "ForCify"
 
 include(":app")

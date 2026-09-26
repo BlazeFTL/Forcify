@@ -22,14 +22,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AcUnit
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Refresh
@@ -47,7 +45,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -85,13 +82,10 @@ import com.example.model.BatchFreezeProgress
 import com.example.model.InstalledAppItem
 import com.example.ui.components.AppIconImage
 import com.example.ui.theme.StateEvading
-import com.example.ui.theme.StateEvadingBg
 import com.example.ui.theme.StateForeground
 import com.example.ui.theme.StateFree
 import com.example.ui.theme.StateFreeBg
 import com.example.ui.theme.StateWorking
-import com.example.ui.theme.StateWorkingBg
-import com.example.ui.viewmodel.DashboardFilter
 import com.example.ui.viewmodel.PureStopViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -100,11 +94,9 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
     val operatingMode by viewModel.operatingMode.collectAsState()
     val allManagedApps by viewModel.allManagedApps.collectAsState()
     val pendingApps by viewModel.pendingApps.collectAsState()
-    val hibernatedApps by viewModel.hibernatedApps.collectAsState()
     val allInstalledApps by viewModel.allInstalledApps.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
-    val currentFilter by viewModel.currentFilter.collectAsState()
     val showAddAppsSheet by viewModel.showAddAppsSheet.collectAsState()
     val hideSystemAppsInAddList by viewModel.hideSystemAppsInAddList.collectAsState()
     val selectedAppForWakeup by viewModel.selectedAppForWakeup.collectAsState()
@@ -115,7 +107,6 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
     var showMenu by remember { mutableStateOf(false) }
     var showModeDialog by remember { mutableStateOf(false) }
     var isSearchExpanded by remember { mutableStateOf(false) }
-    var isHibernatedSectionExpanded by remember { mutableStateOf(false) }
 
     LaunchedEffect(statusMessage) {
         statusMessage?.let {
@@ -125,23 +116,11 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
     }
 
     val runningCount = pendingApps.size
-    val evadingCount = remember(allManagedApps) {
-        allManagedApps.count { it.state == AppState.EVADING_RESTRICTIONS }
-    }
-    val freeCount = hibernatedApps.size
 
-    // Apply search filter
-    val filteredPending = remember(pendingApps, searchQuery) {
+    // Apply search filter strictly to running apps only
+    val filteredRunning = remember(pendingApps, searchQuery) {
         if (searchQuery.isBlank()) pendingApps else {
             pendingApps.filter {
-                it.appName.contains(searchQuery, ignoreCase = true) ||
-                it.packageName.contains(searchQuery, ignoreCase = true)
-            }
-        }
-    }
-    val filteredHibernated = remember(hibernatedApps, searchQuery) {
-        if (searchQuery.isBlank()) hibernatedApps else {
-            hibernatedApps.filter {
                 it.appName.contains(searchQuery, ignoreCase = true) ||
                 it.packageName.contains(searchQuery, ignoreCase = true)
             }
@@ -172,7 +151,7 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                         }
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = "PureStop",
+                            text = "ForCify",
                             fontWeight = FontWeight.Bold,
                             fontSize = 20.sp,
                             color = MaterialTheme.colorScheme.onBackground
@@ -229,29 +208,12 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                         Icon(imageVector = Icons.Default.Search, contentDescription = "Search Apps")
                     }
 
-                    // Cut All Wakeups Quick Action
-                    IconButton(
-                        onClick = { viewModel.cutAllActiveWakeups() },
-                        modifier = Modifier.testTag("cut_wakeups_top_action")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ContentCut,
-                            contentDescription = "Cut All Wakeups",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
-
-                    // Refresh Button
-                    IconButton(onClick = { viewModel.refreshApps() }) {
-                        Icon(imageVector = Icons.Default.Refresh, contentDescription = "Refresh Status")
-                    }
-
                     // THE "+" BUTTON ON TOP REQUESTED BY USER!
                     IconButton(
                         onClick = { viewModel.openAddApps() },
                         modifier = Modifier
                             .testTag("add_apps_top_button")
-                            .padding(end = 4.dp)
+                            .padding(end = 2.dp)
                     ) {
                         Box(
                             modifier = Modifier
@@ -269,7 +231,7 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                         }
                     }
 
-                    // Overflow Menu
+                    // Three-dot menu: Contains Refresh, Cut All Wakeups, Switch Mode, Re-run Setup
                     Box {
                         IconButton(onClick = { showMenu = true }) {
                             Icon(imageVector = Icons.Default.MoreVert, contentDescription = "Options")
@@ -278,6 +240,26 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                             expanded = showMenu,
                             onDismissRequest = { showMenu = false }
                         ) {
+                            DropdownMenuItem(
+                                text = { Text("Refresh Status") },
+                                onClick = {
+                                    showMenu = false
+                                    viewModel.refreshApps()
+                                },
+                                leadingIcon = {
+                                    Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Cut All Wakeups") },
+                                onClick = {
+                                    showMenu = false
+                                    viewModel.cutAllActiveWakeups()
+                                },
+                                leadingIcon = {
+                                    Icon(imageVector = Icons.Default.ContentCut, contentDescription = null)
+                                }
+                            )
                             DropdownMenuItem(
                                 text = { Text("Switch Operating Mode") },
                                 onClick = {
@@ -340,7 +322,7 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // Optional Search Bar
+            // Optional Search Bar with "X" clear button
             AnimatedVisibility(visible = isSearchExpanded) {
                 OutlinedTextField(
                     value = searchQuery,
@@ -348,10 +330,17 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 6.dp),
-                    placeholder = { Text("Filter managed apps...") },
+                    placeholder = { Text("Filter running apps...") },
                     leadingIcon = {
                         Icon(imageVector = Icons.Default.Search, contentDescription = null)
                     },
+                    trailingIcon = if (searchQuery.isNotBlank()) {
+                        {
+                            IconButton(onClick = { viewModel.setSearchQuery("") }) {
+                                Icon(imageVector = Icons.Default.Close, contentDescription = "Clear")
+                            }
+                        }
+                    } else null,
                     shape = RoundedCornerShape(12.dp),
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
@@ -361,47 +350,7 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                 )
             }
 
-            // Hero Overview Cards
-            HeroStatsSection(
-                totalManaged = allManagedApps.size,
-                runningCount = runningCount,
-                evadingCount = evadingCount,
-                freeCount = freeCount,
-                onFilterRunning = { viewModel.setFilter(DashboardFilter.PENDING) },
-                onFilterEvading = { viewModel.setFilter(DashboardFilter.EVADING) },
-                onFilterFree = { viewModel.setFilter(DashboardFilter.HIBERNATED) }
-            )
-
-            // Filter Tabs
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
-                    selected = currentFilter == DashboardFilter.PENDING,
-                    onClick = { viewModel.setFilter(DashboardFilter.PENDING) },
-                    label = { Text("Pending ($runningCount)", fontSize = 12.sp, fontWeight = FontWeight.Bold) }
-                )
-                FilterChip(
-                    selected = currentFilter == DashboardFilter.ALL,
-                    onClick = { viewModel.setFilter(DashboardFilter.ALL) },
-                    label = { Text("All (${allManagedApps.size})", fontSize = 12.sp) }
-                )
-                FilterChip(
-                    selected = currentFilter == DashboardFilter.EVADING,
-                    onClick = { viewModel.setFilter(DashboardFilter.EVADING) },
-                    label = { Text("Evading ($evadingCount)", fontSize = 12.sp) }
-                )
-                FilterChip(
-                    selected = currentFilter == DashboardFilter.HIBERNATED,
-                    onClick = { viewModel.setFilter(DashboardFilter.HIBERNATED) },
-                    label = { Text("Hibernated ($freeCount)", fontSize = 12.sp) }
-                )
-            }
-
-            // Main App List
+            // Main Content: Strictly running apps only, no stopped/hibernated lists cluttering the page!
             if (isLoading && allManagedApps.isEmpty()) {
                 Box(
                     modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -410,142 +359,67 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                     CircularProgressIndicator()
                 }
             } else if (allManagedApps.isEmpty()) {
+                // Empty state when no apps are added yet
                 EmptyStateView(
                     isSearchActive = searchQuery.isNotBlank(),
                     onAddApps = { viewModel.openAddApps() }
                 )
+            } else if (filteredRunning.isEmpty()) {
+                // All apps in the freeze list are stopped/hibernated!
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    AllHibernatedCleanCard(
+                        managedCount = allManagedApps.size,
+                        onAddMore = { viewModel.openAddApps() }
+                    )
+                }
             } else {
                 LazyColumn(
                     modifier = Modifier.weight(1f),
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    when (currentFilter) {
-                        DashboardFilter.PENDING -> {
-                            // Section: Pending apps
-                            if (filteredPending.isNotEmpty()) {
-                                item {
-                                    SectionHeader(
-                                        title = "NOT HIBERNATING AUTOMATICALLY (${filteredPending.size})",
-                                        subtitle = "Tap 'Stop' or use the FAB below to force stop"
-                                    )
-                                }
-                                items(filteredPending, key = { it.packageName }) { app ->
-                                    GreenifyStyleAppCard(
-                                        app = app,
-                                        onForceStop = { viewModel.forceStopSingle(app) },
-                                        onOpenWakeup = { viewModel.selectAppForWakeup(app) },
-                                        onRemove = { viewModel.removeAppFromFreezeList(app.packageName) }
-                                    )
-                                }
-                            } else {
-                                // All pending apps are stopped!
-                                item {
-                                    AllHibernatedCleanCard(
-                                        freeCount = freeCount,
-                                        onExpandHibernated = { isHibernatedSectionExpanded = true },
-                                        onAddMore = { viewModel.openAddApps() }
-                                    )
-                                }
-                            }
-
-                            // Collapsible Hibernated section at bottom
-                            if (filteredHibernated.isNotEmpty()) {
-                                item {
-                                    CollapsibleSectionHeader(
-                                        title = "HIBERNATED / BACKGROUND FREE (${filteredHibernated.size})",
-                                        isExpanded = isHibernatedSectionExpanded,
-                                        onToggle = { isHibernatedSectionExpanded = !isHibernatedSectionExpanded }
-                                    )
-                                }
-                                if (isHibernatedSectionExpanded) {
-                                    items(filteredHibernated, key = { it.packageName }) { app ->
-                                        GreenifyStyleAppCard(
-                                            app = app,
-                                            onForceStop = { viewModel.forceStopSingle(app) },
-                                            onOpenWakeup = { viewModel.selectAppForWakeup(app) },
-                                            onRemove = { viewModel.removeAppFromFreezeList(app.packageName) }
-                                        )
-                                    }
-                                }
-                            }
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 4.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "NOT HIBERNATING AUTOMATICALLY (${filteredRunning.size})",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "${allManagedApps.size} Managed",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold
+                            )
                         }
-
-                        DashboardFilter.ALL -> {
-                            if (filteredPending.isNotEmpty()) {
-                                item {
-                                    SectionHeader(title = "NOT HIBERNATING AUTOMATICALLY (${filteredPending.size})")
-                                }
-                                items(filteredPending, key = { it.packageName }) { app ->
-                                    GreenifyStyleAppCard(
-                                        app = app,
-                                        onForceStop = { viewModel.forceStopSingle(app) },
-                                        onOpenWakeup = { viewModel.selectAppForWakeup(app) },
-                                        onRemove = { viewModel.removeAppFromFreezeList(app.packageName) }
-                                    )
-                                }
-                            }
-                            if (filteredHibernated.isNotEmpty()) {
-                                item {
-                                    Spacer(modifier = Modifier.height(10.dp))
-                                    SectionHeader(title = "HIBERNATED (${filteredHibernated.size})")
-                                }
-                                items(filteredHibernated, key = { it.packageName }) { app ->
-                                    GreenifyStyleAppCard(
-                                        app = app,
-                                        onForceStop = { viewModel.forceStopSingle(app) },
-                                        onOpenWakeup = { viewModel.selectAppForWakeup(app) },
-                                        onRemove = { viewModel.removeAppFromFreezeList(app.packageName) }
-                                    )
-                                }
-                            }
-                        }
-
-                        DashboardFilter.EVADING -> {
-                            val evadingList = allManagedApps.filter { it.state == AppState.EVADING_RESTRICTIONS }
-                            if (evadingList.isEmpty()) {
-                                item {
-                                    Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                                        Text("No apps currently evading background restrictions.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                }
-                            } else {
-                                items(evadingList, key = { it.packageName }) { app ->
-                                    GreenifyStyleAppCard(
-                                        app = app,
-                                        onForceStop = { viewModel.forceStopSingle(app) },
-                                        onOpenWakeup = { viewModel.selectAppForWakeup(app) },
-                                        onRemove = { viewModel.removeAppFromFreezeList(app.packageName) }
-                                    )
-                                }
-                            }
-                        }
-
-                        DashboardFilter.HIBERNATED -> {
-                            if (filteredHibernated.isEmpty()) {
-                                item {
-                                    Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                                        Text("No hibernated apps. Running apps need to be force stopped first.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                }
-                            } else {
-                                items(filteredHibernated, key = { it.packageName }) { app ->
-                                    GreenifyStyleAppCard(
-                                        app = app,
-                                        onForceStop = { viewModel.forceStopSingle(app) },
-                                        onOpenWakeup = { viewModel.selectAppForWakeup(app) },
-                                        onRemove = { viewModel.removeAppFromFreezeList(app.packageName) }
-                                    )
-                                }
-                            }
-                        }
+                    }
+                    items(filteredRunning, key = { it.packageName }) { app ->
+                        GreenifyStyleAppCard(
+                            app = app,
+                            onForceStop = { viewModel.forceStopSingle(app) },
+                            onOpenWakeup = { viewModel.selectAppForWakeup(app) },
+                            onRemove = { viewModel.removeAppFromFreezeList(app.packageName) }
+                        )
                     }
                 }
             }
         }
     }
 
-    // Modal Add Apps Sheet with Hide System Apps Toggle
+    // Modal Add Apps Sheet with Hide System Apps inside Three-Dot
     if (showAddAppsSheet) {
         AddAppsDialog(
             allApps = allInstalledApps,
@@ -560,15 +434,24 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
         )
     }
 
-    // Wake-Up Inspection & Cut Dialog
+    // Wake-Up Inspection & Granular Cut Dialog
     selectedAppForWakeup?.let { app ->
         WakeUpCutDialog(
             app = app,
             operatingMode = operatingMode,
             onDismiss = { viewModel.selectAppForWakeup(null) },
-            onCutWakeups = { viewModel.cutWakeups(it) },
-            onRestoreWakeups = { viewModel.restoreWakeups(it) },
-            onForceStop = { viewModel.forceStopSingle(it) }
+            onTogglePath = { item, path, cut ->
+                viewModel.toggleSpecificWakeUpPath(item, path, cut)
+            },
+            onCutAllPaths = { item ->
+                viewModel.cutAllWakeUpPaths(item)
+            },
+            onRestoreAllPaths = { item ->
+                viewModel.restoreAllWakeUpPaths(item)
+            },
+            onForceStop = { item ->
+                viewModel.forceStopSingle(item)
+            }
         )
     }
 
@@ -593,159 +476,6 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
     }
 }
 
-@Composable
-private fun SectionHeader(title: String, subtitle: String? = null) {
-    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp, horizontal = 4.dp)) {
-        Text(
-            text = title,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        if (subtitle != null) {
-            Text(
-                text = subtitle,
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-            )
-        }
-    }
-}
-
-@Composable
-private fun CollapsibleSectionHeader(
-    title: String,
-    isExpanded: Boolean,
-    onToggle: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onToggle)
-            .padding(vertical = 8.dp, horizontal = 4.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = title,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Icon(
-            imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(18.dp)
-        )
-    }
-}
-
-@Composable
-private fun HeroStatsSection(
-    totalManaged: Int,
-    runningCount: Int,
-    evadingCount: Int,
-    freeCount: Int,
-    onFilterRunning: () -> Unit,
-    onFilterEvading: () -> Unit,
-    onFilterFree: () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(16.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "App State Monitor",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = "$totalManaged Managed",
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                StatMetricCard(
-                    title = "Pending",
-                    count = runningCount,
-                    color = StateWorking,
-                    bgColor = StateWorkingBg,
-                    modifier = Modifier.weight(1f).clickable(onClick = onFilterRunning)
-                )
-                StatMetricCard(
-                    title = "Evading",
-                    count = evadingCount,
-                    color = StateEvading,
-                    bgColor = StateEvadingBg,
-                    modifier = Modifier.weight(1f).clickable(onClick = onFilterEvading)
-                )
-                StatMetricCard(
-                    title = "Free",
-                    count = freeCount,
-                    color = StateFree,
-                    bgColor = StateFreeBg,
-                    modifier = Modifier.weight(1f).clickable(onClick = onFilterFree)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun StatMetricCard(
-    title: String,
-    count: Int,
-    color: Color,
-    bgColor: Color,
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(bgColor)
-            .border(1.dp, color.copy(alpha = 0.25f), RoundedCornerShape(12.dp))
-            .padding(vertical = 8.dp, horizontal = 6.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = "$count",
-                fontSize = 19.sp,
-                fontWeight = FontWeight.Bold,
-                color = color
-            )
-            Spacer(modifier = Modifier.height(1.dp))
-            Text(
-                text = title,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = color.copy(alpha = 0.85f)
-            )
-        }
-    }
-}
-
 /**
  * Greenify-style app card: App name on line 1, exact state and details on line 2, stop action on right
  */
@@ -758,13 +488,11 @@ private fun GreenifyStyleAppCard(
 ) {
     var showItemMenu by remember { mutableStateOf(false) }
 
-    val isRunning = app.state != AppState.BACKGROUND_FREE && app.state != AppState.CACHED
     val stateText = when {
         app.stateDetail.isNotBlank() -> app.stateDetail
         app.state == AppState.EVADING_RESTRICTIONS -> "Running as foreground (evading restrictions)"
         app.state == AppState.FOREGROUND -> "Foreground (Ignored running state)"
         app.state == AppState.WORKING_STATE -> "Background service active"
-        app.state == AppState.BACKGROUND_FREE -> "Hibernated"
         else -> app.state.label
     }
 
@@ -772,8 +500,7 @@ private fun GreenifyStyleAppCard(
         AppState.EVADING_RESTRICTIONS -> StateEvading
         AppState.FOREGROUND -> StateForeground
         AppState.WORKING_STATE -> StateWorking
-        AppState.BACKGROUND_FREE -> StateFree
-        AppState.CACHED -> Color(0xFF64748B)
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
 
     Card(
@@ -823,46 +550,30 @@ private fun GreenifyStyleAppCard(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Action button on right
-            if (isRunning) {
-                Button(
-                    onClick = onForceStop,
-                    modifier = Modifier
-                        .height(34.dp)
-                        .testTag("force_stop_${app.packageName}"),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                    ),
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.StopCircle,
-                        contentDescription = null,
-                        modifier = Modifier.size(15.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "Stop",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            } else {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(StateFreeBg)
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Text(
-                        text = "Frozen",
-                        fontSize = 11.sp,
-                        color = StateFree,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
+            // Stop Button on Right
+            Button(
+                onClick = onForceStop,
+                modifier = Modifier
+                    .height(34.dp)
+                    .testTag("force_stop_${app.packageName}"),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                ),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.StopCircle,
+                    contentDescription = null,
+                    modifier = Modifier.size(15.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = "Stop",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
 
             Box {
@@ -901,28 +612,28 @@ private fun GreenifyStyleAppCard(
 
 @Composable
 private fun AllHibernatedCleanCard(
-    freeCount: Int,
-    onExpandHibernated: () -> Unit,
+    managedCount: Int,
     onAddMore: () -> Unit
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 12.dp),
+            .padding(vertical = 16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(16.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, StateFree.copy(alpha = 0.3f))
+        shape = RoundedCornerShape(20.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, StateFree.copy(alpha = 0.35f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(24.dp),
+                .padding(28.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
             Box(
                 modifier = Modifier
-                    .size(68.dp)
+                    .size(72.dp)
                     .clip(CircleShape)
                     .background(StateFreeBg),
                 contentAlignment = Alignment.Center
@@ -931,43 +642,33 @@ private fun AllHibernatedCleanCard(
                     imageVector = Icons.Default.CheckCircle,
                     contentDescription = null,
                     tint = StateFree,
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier.size(44.dp)
                 )
             }
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(16.dp))
             Text(
-                text = "All Managed Apps Are Hibernated",
-                fontSize = 17.sp,
+                text = "All Apps Stopped & Hibernated",
+                fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground
             )
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "0 apps running in background. Your RAM and battery are protected.",
-                fontSize = 12.sp,
+                text = "$managedCount apps in your freeze list are currently background-free. Zero RAM or battery wasted.",
+                fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
-                lineHeight = 17.sp
+                lineHeight = 18.sp
             )
-            Spacer(modifier = Modifier.height(16.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedButton(
-                    onClick = onExpandHibernated,
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Icon(imageVector = Icons.Default.AcUnit, contentDescription = null, modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(text = "View Hibernated ($freeCount)", fontSize = 12.sp)
-                }
-                Button(
-                    onClick = onAddMore,
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Icon(imageVector = Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(text = "Add Apps", fontSize = 12.sp)
-                }
+            Spacer(modifier = Modifier.height(20.dp))
+            Button(
+                onClick = onAddMore,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Icon(imageVector = Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(text = "Add More Apps", fontSize = 13.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -999,9 +700,9 @@ private fun EmptyStateView(
                 modifier = Modifier.size(36.dp)
             )
         }
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(18.dp))
         Text(
-            text = if (isSearchActive) "No Matching Apps Found" else "No Apps in Freeze List",
+            text = if (isSearchActive) "No Matching Apps" else "No Apps Added Yet",
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onBackground
@@ -1009,25 +710,23 @@ private fun EmptyStateView(
         Spacer(modifier = Modifier.height(6.dp))
         Text(
             text = if (isSearchActive)
-                "Try searching by another keyword."
+                "Try searching with another name or clear the search query."
             else
-                "Add apps to your list using the '+' button at the top to track working state and force stop them on demand.",
+                "Add apps to your freeze list to detect running services and force stop them on demand.",
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
             lineHeight = 18.sp
         )
-        if (!isSearchActive) {
-            Spacer(modifier = Modifier.height(20.dp))
-            Button(
-                onClick = onAddApps,
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                shape = RoundedCornerShape(10.dp)
-            ) {
-                Icon(imageVector = Icons.Default.Add, contentDescription = null)
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(text = "Add Apps to Freeze List")
-            }
+        Spacer(modifier = Modifier.height(20.dp))
+        Button(
+            onClick = onAddApps,
+            shape = RoundedCornerShape(10.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+        ) {
+            Icon(imageVector = Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Add Apps to Freeze List", fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -1038,35 +737,41 @@ private fun BatchProgressDialog(
     onDismiss: () -> Unit
 ) {
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {},
+        containerColor = MaterialTheme.colorScheme.surface,
         title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                Spacer(modifier = Modifier.width(12.dp))
-                Text(text = "Freezing Applications...", fontSize = 17.sp, fontWeight = FontWeight.Bold)
-            }
+            Text(
+                text = "Force Stopping Apps...",
+                fontWeight = FontWeight.Bold,
+                fontSize = 17.sp,
+                color = MaterialTheme.colorScheme.onSurface
+            )
         },
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    text = progress.summary,
+                    text = "Stopping: ${progress.currentAppName}",
                     fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold
                 )
-                Spacer(modifier = Modifier.height(12.dp))
-                val fraction = if (progress.totalCount > 0)
-                    progress.completedCount.toFloat() / progress.totalCount.toFloat()
-                else 0f
-                LinearProgressIndicator(
-                    progress = { fraction },
-                    modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp))
-                )
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "${progress.completedCount} of ${progress.totalCount} completed",
+                    text = progress.summary,
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Spacer(modifier = Modifier.height(14.dp))
+                if (progress.totalCount > 0) {
+                    val frac = progress.completedCount.toFloat() / progress.totalCount.toFloat()
+                    LinearProgressIndicator(
+                        progress = { frac },
+                        modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(8.dp))
+                }
             }
         },
         confirmButton = {
@@ -1085,18 +790,21 @@ private fun SwitchModeDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(text = "Switch Operating Mode", fontWeight = FontWeight.Bold) },
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = {
+            Text("Switch Operating Mode", fontWeight = FontWeight.Bold, fontSize = 17.sp)
+        },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                ModeOptionRow(
-                    title = "Root Mode ⚡",
-                    description = "Executes instant silent force stops and deep AppOps wake restrictions via su.",
+                ModeSelectionItem(
+                    title = "Root Mode (SuperSU / Magisk / KernelSU)",
+                    description = "Instant background termination via 'am force-stop' and kernel appops component cutoff. Requires root access.",
                     isSelected = currentMode == OperatingMode.ROOT,
                     onClick = { onSelectMode(OperatingMode.ROOT) }
                 )
-                ModeOptionRow(
-                    title = "Non-Root Mode 🛡️",
-                    description = "Automates force stopping through Android Accessibility Service and standard power manager.",
+                ModeSelectionItem(
+                    title = "Non-Root Mode (Accessibility Automation)",
+                    description = "Safe automated force stop using Android Accessibility Service. Works on standard unrooted devices.",
                     isSelected = currentMode == OperatingMode.NON_ROOT,
                     onClick = { onSelectMode(OperatingMode.NON_ROOT) }
                 )
@@ -1104,14 +812,14 @@ private fun SwitchModeDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("Done")
+                Text("Close")
             }
         }
     )
 }
 
 @Composable
-private fun ModeOptionRow(
+private fun ModeSelectionItem(
     title: String,
     description: String,
     isSelected: Boolean,
@@ -1120,20 +828,38 @@ private fun ModeOptionRow(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .border(
-                width = if (isSelected) 2.dp else 1.dp,
-                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
-                shape = RoundedCornerShape(10.dp)
-            )
             .clickable(onClick = onClick),
         colors = CardDefaults.cardColors(
-            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f) else MaterialTheme.colorScheme.surface
-        )
+            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+        ),
+        border = if (isSelected) androidx.compose.foundation.BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null,
+        shape = RoundedCornerShape(10.dp)
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
-            Text(text = title, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(text = description, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = title,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+                if (isSelected) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = description,
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 15.sp
+            )
         }
     }
 }

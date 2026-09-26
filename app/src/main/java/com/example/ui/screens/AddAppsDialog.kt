@@ -21,13 +21,19 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -37,8 +43,6 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -77,6 +81,7 @@ fun AddAppsDialog(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var searchQuery by remember { mutableStateOf("") }
     var currentFilter by remember { mutableStateOf(AddAppFilter.ALL) }
+    var showOptionsMenu by remember { mutableStateOf(false) }
     val selectedPackages = remember { mutableStateOf(mutableSetOf<String>()) }
 
     // Filter candidate apps (exclude already managed apps and apply system filter)
@@ -112,7 +117,7 @@ fun AddAppsDialog(
                 .fillMaxSize()
                 .navigationBarsPadding()
         ) {
-            // Header
+            // Header with title and Three-Dot Menu
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -128,27 +133,80 @@ fun AddAppsDialog(
                         color = MaterialTheme.colorScheme.onBackground
                     )
                     Text(
-                        text = "${candidateApps.size} apps available to manage",
+                        text = "${candidateApps.size} apps available" + if (hideSystemApps) " (System apps hidden)" else " (Including system apps)",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                IconButton(onClick = onDismiss) {
-                    Icon(imageVector = Icons.Default.Close, contentDescription = "Close")
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Three-dot options menu requested by user!
+                    Box {
+                        IconButton(onClick = { showOptionsMenu = true }) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "Filter Options",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showOptionsMenu,
+                            onDismissRequest = { showOptionsMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = if (hideSystemApps) "Hide System Apps ✓" else "Hide System Apps",
+                                        fontWeight = if (hideSystemApps) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                },
+                                onClick = {
+                                    showOptionsMenu = false
+                                    onToggleHideSystemApps(!hideSystemApps)
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = if (hideSystemApps) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = null,
+                                        tint = if (hideSystemApps) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            )
+                        }
+                    }
+
+                    IconButton(onClick = onDismiss) {
+                        Icon(imageVector = Icons.Default.Close, contentDescription = "Close")
+                    }
                 }
             }
 
-            // Search Bar
+            // Search Bar with "X" clear button requested by user!
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 4.dp),
+                    .padding(horizontal = 20.dp, vertical = 6.dp),
                 placeholder = { Text("Search installed applications...") },
                 leadingIcon = {
-                    Icon(imageVector = Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 },
+                trailingIcon = if (searchQuery.isNotBlank()) {
+                    {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Clear search query",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                } else null,
                 singleLine = true,
                 shape = RoundedCornerShape(12.dp),
                 colors = OutlinedTextFieldDefaults.colors(
@@ -158,35 +216,6 @@ fun AddAppsDialog(
                     unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
                 )
             )
-
-            // Hide System Apps Toggle Row (Requested by User)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "Hide System Apps",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = if (hideSystemApps) "(User Apps Only)" else "(Showing All)",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Switch(
-                    checked = hideSystemApps,
-                    onCheckedChange = onToggleHideSystemApps,
-                    colors = SwitchDefaults.colors(checkedThumbColor = MaterialTheme.colorScheme.primary)
-                )
-            }
 
             // Filter Chips & Quick Select Row
             Row(

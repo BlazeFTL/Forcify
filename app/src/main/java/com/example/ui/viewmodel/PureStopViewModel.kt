@@ -12,12 +12,14 @@ import androidx.lifecycle.viewModelScope
 import com.example.PureStopApp
 import com.example.data.HibernatedAppEntity
 import com.example.data.OperatingMode
+import com.example.data.PureStopPreferences
 import com.example.detector.AppStatusDetector
 import com.example.engine.ForceStopEngine
 import com.example.engine.RootExecutor
 import com.example.model.AppState
 import com.example.model.BatchFreezeProgress
 import com.example.model.InstalledAppItem
+import com.example.model.WakeUpPath
 import com.example.service.ForceStopAccessibilityService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -33,13 +35,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-enum class DashboardFilter {
-    PENDING,    // Running or evading apps waiting to be stopped (Default)
-    ALL,        // All managed apps in list
-    EVADING,    // Apps actively evading restrictions
-    HIBERNATED  // Already stopped / Background Free apps
-}
-
 enum class RootCheckStatus {
     IDLE,
     CHECKING,
@@ -47,15 +42,23 @@ enum class RootCheckStatus {
     DENIED
 }
 
+enum class DashboardFilter {
+    PENDING,
+    ALL,
+    EVADING,
+    HIBERNATED
+}
+
 class PureStopViewModel(application: Application) : AndroidViewModel(application) {
 
     private val app = application as PureStopApp
     private val database = app.database
-    private val preferences = app.preferences
-    private val detector = AppStatusDetector(application)
+    val preferences = app.preferences
+
+    val detector = AppStatusDetector(application)
     val engine = ForceStopEngine(application, database, preferences)
 
-    // Mode & Setup
+    // Operating Mode
     private val _operatingMode = MutableStateFlow(preferences.mode)
     val operatingMode: StateFlow<OperatingMode> = _operatingMode.asStateFlow()
 
@@ -79,7 +82,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
     private val _hideSystemAppsInAddList = MutableStateFlow(preferences.hideSystemAppsInAddList)
     val hideSystemAppsInAddList: StateFlow<Boolean> = _hideSystemAppsInAddList.asStateFlow()
 
-    // Dashboard State: Default to PENDING so stopped apps don't clutter the main list
+    // Dashboard State
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
@@ -107,39 +110,12 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                 isManaged = true,
                 lastFrozenTimestamp = entity?.lastFrozenTimestamp ?: 0L,
                 freezeCount = entity?.freezeCount ?: 0,
-                wakeUpDetails = item.wakeUpDetails.copy(isCut = entity?.cutWakeups == true)
+                wakeUpDetails = item.wakeUpDetails.copy(isCut = entity?.cutWakeups == true || item.wakeUpDetails.isCut)
             )
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // Filtered managed apps for display on Home Page
-    val managedApps: StateFlow<List<InstalledAppItem>> = combine(
-        allManagedApps,
-        _searchQuery,
-        _currentFilter
-    ) { list, query, filter ->
-        val filteredByQuery = if (query.isBlank()) list else {
-            list.filter {
-                it.appName.contains(query, ignoreCase = true) ||
-                it.packageName.contains(query, ignoreCase = true)
-            }
-        }
-
-        when (filter) {
-            DashboardFilter.PENDING -> filteredByQuery.filter {
-                it.state == AppState.FOREGROUND ||
-                it.state == AppState.WORKING_STATE ||
-                it.state == AppState.EVADING_RESTRICTIONS
-            }
-            DashboardFilter.ALL -> filteredByQuery
-            DashboardFilter.EVADING -> filteredByQuery.filter { it.state == AppState.EVADING_RESTRICTIONS }
-            DashboardFilter.HIBERNATED -> filteredByQuery.filter {
-                it.state == AppState.BACKGROUND_FREE || it.state == AppState.CACHED
-            }
-        }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    // Separate live pending apps and hibernated apps for clean Greenify-style grouping
+    // Running managed apps (Pending / Working / Evading / Foreground) - exactly what should show on Home Page
     val pendingApps: StateFlow<List<InstalledAppItem>> = allManagedApps.map { list ->
         list.filter {
             it.state == AppState.FOREGROUND ||
@@ -174,7 +150,11 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
         startLiveMonitoring()
 
         viewModelScope.launch {
-            ForceStopAccessibilityService.stoppedPackageFlow.collect {
+            ForceStopAccessibilityService.stoppedPackageFlow.collect { stoppedPkg ->
+                // Immediately mark as hibernated in memory for instant feedback
+                _allInstalledApps.value = _allInstalledApps.value.map {
+                    if (it.packageName == stoppedPkg) it.copy(state = AppState.BACKGROUND_FREE, stateDetail = "Hibernated") else it
+                }
                 refreshApps(silent = true)
             }
         }
@@ -184,7 +164,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
         if (liveMonitoringJob?.isActive == true) return
         liveMonitoringJob = viewModelScope.launch(Dispatchers.Default) {
             while (isActive) {
-                delay(2500)
+                delay(3000)
                 refreshApps(silent = true)
             }
         }
@@ -268,17 +248,14 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                 withContext(Dispatchers.Default) {
                     val pm = getApplication<Application>().packageManager
                     val packages = pm.getInstalledPackages(
-                        PackageManager.GET_PERMISSIONS or PackageManager.GET_RECEIVERS
+                        PackageManager.GET_PERMISSIONS or
+                        PackageManager.GET_RECEIVERS or
+                        PackageManager.GET_SERVICES
                     )
 
                     val isRoot = preferences.mode == OperatingMode.ROOT
-                    // 1. Root processes & foreground service inspection
                     val rootProcessMap = if (isRoot) RootExecutor.queryRootProcessStates() else emptyMap()
-
-                    // 2. Non-root active foreground services & recent activities
                     val nonRootActivityMap = detector.getNonRootActivityMap()
-
-                    // 3. System running processes map
                     val runningMap = detector.getRunningProcessesMap()
 
                     val cutPackages = mutableSetOf<String>()
@@ -287,6 +264,14 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                     for (e in dbEntities) {
                         managedPackages.add(e.packageName)
                         if (e.cutWakeups) cutPackages.add(e.packageName)
+                    }
+
+                    val cutPathsMap = mutableMapOf<String, Set<String>>()
+                    for (pkgInfo in packages) {
+                        val savedCut = preferences.getCutPathsForPackage(pkgInfo.packageName)
+                        if (savedCut.isNotEmpty()) {
+                            cutPathsMap[pkgInfo.packageName] = savedCut
+                        }
                     }
 
                     val twentyFourHourWakeups = detector.calculateWakeups24h()
@@ -303,6 +288,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                             isRootMode = isRoot,
                             managedPackages = managedPackages,
                             cutPackages = cutPackages,
+                            cutPathsMap = cutPathsMap,
                             twentyFourHourWakeups = twentyFourHourWakeups
                         )
                         resultList.add(item)
@@ -318,6 +304,15 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                     )
 
                     _allInstalledApps.value = resultList
+
+                    // Keep selected dialog app in sync if open
+                    val currentSelected = _selectedAppForWakeup.value
+                    if (currentSelected != null) {
+                        val updated = resultList.find { it.packageName == currentSelected.packageName }
+                        if (updated != null) {
+                            _selectedAppForWakeup.value = updated
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 _statusMessage.value = "Failed to scan installed apps: ${e.localizedMessage}"
@@ -340,7 +335,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
             }
             database.appDao().insertApps(entities)
             _showAddAppsSheet.value = false
-            _statusMessage.value = "Added ${apps.size} apps to hibernation list"
+            _statusMessage.value = "Added ${apps.size} apps to list"
             refreshApps(silent = true)
         }
     }
@@ -348,13 +343,18 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
     fun removeAppFromFreezeList(packageName: String) {
         viewModelScope.launch {
             database.appDao().deleteApp(packageName)
-            _statusMessage.value = "Removed from hibernation list"
+            _statusMessage.value = "Removed from list"
             refreshApps(silent = true)
         }
     }
 
     fun forceStopSingle(app: InstalledAppItem) {
         viewModelScope.launch {
+            // Instant optimistic update so it disappears immediately from running list
+            _allInstalledApps.value = _allInstalledApps.value.map {
+                if (it.packageName == app.packageName) it.copy(state = AppState.BACKGROUND_FREE, stateDetail = "Hibernated") else it
+            }
+
             val success = engine.stopSingleApp(app)
             _statusMessage.value = if (success) "Force stopped ${app.appName}" else "Failed to force stop ${app.appName}"
             delay(250)
@@ -367,12 +367,11 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
             val runningManaged = allManagedApps.value.filter {
                 it.state == AppState.FOREGROUND ||
                 it.state == AppState.WORKING_STATE ||
-                it.state == AppState.EVADING_RESTRICTIONS ||
-                it.state == AppState.CACHED
+                it.state == AppState.EVADING_RESTRICTIONS
             }
 
             if (runningManaged.isEmpty()) {
-                _statusMessage.value = "All managed apps are already Background Free!"
+                _statusMessage.value = "All apps are already stopped!"
                 return@launch
             }
 
@@ -385,18 +384,93 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun cutWakeups(app: InstalledAppItem) {
+    fun toggleSpecificWakeUpPath(app: InstalledAppItem, path: WakeUpPath, cut: Boolean) {
         viewModelScope.launch {
-            val success = engine.cutWakeUps(app)
-            _statusMessage.value = if (success) "Cut wakeups for ${app.appName}" else "Unable to cut wakeups"
+            preferences.togglePathCut(app.packageName, path.id, cut)
+            if (preferences.mode == OperatingMode.ROOT) {
+                if (cut) {
+                    RootExecutor.cutSpecificWakeUpPath(path)
+                } else {
+                    RootExecutor.restoreSpecificWakeUpPath(path)
+                }
+            }
+
+            // Update in-memory state of selected app
+            val currentSelected = _selectedAppForWakeup.value
+            if (currentSelected != null && currentSelected.packageName == app.packageName) {
+                val updatedPaths = currentSelected.wakeUpDetails.paths.map {
+                    if (it.id == path.id) it.copy(isCut = cut) else it
+                }
+                val allCut = updatedPaths.all { it.isCut }
+                val updatedApp = currentSelected.copy(
+                    wakeUpDetails = currentSelected.wakeUpDetails.copy(
+                        paths = updatedPaths,
+                        isCut = allCut
+                    )
+                )
+                _selectedAppForWakeup.value = updatedApp
+            }
+
+            _statusMessage.value = if (cut) "Cut path: ${path.title}" else "Restored path: ${path.title}"
             refreshApps(silent = true)
         }
     }
 
-    fun restoreWakeups(app: InstalledAppItem) {
+    fun cutAllWakeUpPaths(app: InstalledAppItem) {
         viewModelScope.launch {
-            val success = engine.restoreWakeUps(app)
-            _statusMessage.value = if (success) "Restored wakeups for ${app.appName}" else "Unable to restore wakeups"
+            val allPathIds = app.wakeUpDetails.paths.map { it.id }.toSet()
+            preferences.setCutPathsForPackage(app.packageName, allPathIds)
+
+            if (preferences.mode == OperatingMode.ROOT) {
+                for (p in app.wakeUpDetails.paths) {
+                    RootExecutor.cutSpecificWakeUpPath(p)
+                }
+                RootExecutor.cutWakeUps(app.packageName)
+            } else {
+                engine.cutWakeUps(app)
+            }
+
+            val currentSelected = _selectedAppForWakeup.value
+            if (currentSelected != null && currentSelected.packageName == app.packageName) {
+                val updatedPaths = currentSelected.wakeUpDetails.paths.map { it.copy(isCut = true) }
+                _selectedAppForWakeup.value = currentSelected.copy(
+                    wakeUpDetails = currentSelected.wakeUpDetails.copy(
+                        paths = updatedPaths,
+                        isCut = true
+                    )
+                )
+            }
+
+            _statusMessage.value = "Cut all ${app.wakeUpDetails.paths.size} wake-up paths for ${app.appName}"
+            refreshApps(silent = true)
+        }
+    }
+
+    fun restoreAllWakeUpPaths(app: InstalledAppItem) {
+        viewModelScope.launch {
+            preferences.setCutPathsForPackage(app.packageName, emptySet())
+
+            if (preferences.mode == OperatingMode.ROOT) {
+                for (p in app.wakeUpDetails.paths) {
+                    RootExecutor.restoreSpecificWakeUpPath(p)
+                }
+                RootExecutor.restoreWakeUps(app.packageName)
+            } else {
+                engine.restoreWakeUps(app)
+            }
+
+            val currentSelected = _selectedAppForWakeup.value
+            if (currentSelected != null && currentSelected.packageName == app.packageName) {
+                val updatedPaths = currentSelected.wakeUpDetails.paths.map { it.copy(isCut = false) }
+                _selectedAppForWakeup.value = currentSelected.copy(
+                    wakeUpDetails = currentSelected.wakeUpDetails.copy(
+                        paths = updatedPaths,
+                        isCut = false
+                    )
+                )
+            }
+
+            _statusMessage.value = "Restored all wake-up paths for ${app.appName}"
             refreshApps(silent = true)
         }
     }
@@ -405,7 +479,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             val candidates = allManagedApps.value.filter {
                 !it.wakeUpDetails.isCut &&
-                (it.state == AppState.EVADING_RESTRICTIONS || it.wakeUpDetails.wakeupCount24h > 5)
+                (it.state == AppState.EVADING_RESTRICTIONS || it.wakeUpDetails.wakeupCount24h > 0)
             }
             if (candidates.isEmpty()) {
                 _statusMessage.value = "All active apps have already been cut!"
@@ -413,7 +487,8 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
             }
             var count = 0
             for (c in candidates) {
-                if (engine.cutWakeUps(c)) count++
+                cutAllWakeUpPaths(c)
+                count++
             }
             _statusMessage.value = "Cut wakeups for $count apps"
             refreshApps(silent = true)

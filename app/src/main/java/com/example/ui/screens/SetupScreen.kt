@@ -114,7 +114,7 @@ fun SetupScreen(viewModel: PureStopViewModel) {
                 Spacer(modifier = Modifier.width(14.dp))
                 Column {
                     Text(
-                        text = "PureStop",
+                        text = "ForCify",
                         fontSize = 24.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onBackground

@@ -199,4 +199,70 @@ object RootExecutor {
             Result.failure(e)
         }
     }
+
+    suspend fun cutSpecificWakeUpPath(path: com.example.model.WakeUpPath): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            when (path.type) {
+                com.example.model.WakeUpPathType.RECEIVER_BOOT,
+                com.example.model.WakeUpPathType.RECEIVER_CONNECTIVITY,
+                com.example.model.WakeUpPathType.RECEIVER_POWER,
+                com.example.model.WakeUpPathType.RECEIVER_USER_PRESENT,
+                com.example.model.WakeUpPathType.RECEIVER_PACKAGE,
+                com.example.model.WakeUpPathType.RECEIVER_CUSTOM,
+                com.example.model.WakeUpPathType.SERVICE_BACKGROUND,
+                com.example.model.WakeUpPathType.SERVICE_FOREGROUND,
+                com.example.model.WakeUpPathType.SERVICE_JOB -> {
+                    executeCommand("pm disable ${path.componentName}")
+                }
+                com.example.model.WakeUpPathType.OP_WAKE_LOCK -> {
+                    executeCommand("cmd appops set ${path.packageName} WAKE_LOCK ignore")
+                }
+                com.example.model.WakeUpPathType.OP_RUN_IN_BACKGROUND -> {
+                    executeCommand("cmd appops set ${path.packageName} RUN_IN_BACKGROUND ignore")
+                }
+                com.example.model.WakeUpPathType.OP_SCHEDULED_ALARM -> {
+                    executeCommand("cmd appops set ${path.packageName} SCHEDULE_EXACT_ALARM ignore")
+                }
+                com.example.model.WakeUpPathType.BATTERY_OPTIMIZATION -> {
+                    executeCommand("dumpsys deviceidle whitelist -${path.packageName}")
+                }
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun restoreSpecificWakeUpPath(path: com.example.model.WakeUpPath): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            when (path.type) {
+                com.example.model.WakeUpPathType.RECEIVER_BOOT,
+                com.example.model.WakeUpPathType.RECEIVER_CONNECTIVITY,
+                com.example.model.WakeUpPathType.RECEIVER_POWER,
+                com.example.model.WakeUpPathType.RECEIVER_USER_PRESENT,
+                com.example.model.WakeUpPathType.RECEIVER_PACKAGE,
+                com.example.model.WakeUpPathType.RECEIVER_CUSTOM,
+                com.example.model.WakeUpPathType.SERVICE_BACKGROUND,
+                com.example.model.WakeUpPathType.SERVICE_FOREGROUND,
+                com.example.model.WakeUpPathType.SERVICE_JOB -> {
+                    executeCommand("pm enable ${path.componentName}")
+                }
+                com.example.model.WakeUpPathType.OP_WAKE_LOCK -> {
+                    executeCommand("cmd appops set ${path.packageName} WAKE_LOCK allow")
+                }
+                com.example.model.WakeUpPathType.OP_RUN_IN_BACKGROUND -> {
+                    executeCommand("cmd appops set ${path.packageName} RUN_IN_BACKGROUND allow")
+                }
+                com.example.model.WakeUpPathType.OP_SCHEDULED_ALARM -> {
+                    executeCommand("cmd appops set ${path.packageName} SCHEDULE_EXACT_ALARM allow")
+                }
+                com.example.model.WakeUpPathType.BATTERY_OPTIMIZATION -> {
+                    executeCommand("dumpsys deviceidle whitelist +${path.packageName}")
+                }
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 }
