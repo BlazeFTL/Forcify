@@ -443,6 +443,9 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
             onTogglePath = { item, path, cut ->
                 viewModel.toggleSpecificWakeUpPath(item, path, cut)
             },
+            onCutSafePaths = { item ->
+                viewModel.cutSafeWakeUpPaths(item)
+            },
             onCutAllPaths = { item ->
                 viewModel.cutAllWakeUpPaths(item)
             },

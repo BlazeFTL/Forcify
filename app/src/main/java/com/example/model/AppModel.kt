@@ -10,20 +10,31 @@ enum class AppState(val label: String, val description: String) {
     BACKGROUND_FREE("Background Free", "Hibernated cleanly; zero active processes")
 }
 
-enum class WakeUpPathType(val category: String, val label: String) {
-    RECEIVER_BOOT("Receiver", "Boot Receiver"),
-    RECEIVER_CONNECTIVITY("Receiver", "Network State Trigger"),
-    RECEIVER_POWER("Receiver", "Power & Charger Trigger"),
-    RECEIVER_USER_PRESENT("Receiver", "Screen Unlock Trigger"),
-    RECEIVER_PACKAGE("Receiver", "App / Package Update"),
-    RECEIVER_CUSTOM("Receiver", "Broadcast Receiver"),
-    SERVICE_BACKGROUND("Service", "Background Service"),
-    SERVICE_FOREGROUND("Service", "Foreground Service"),
-    SERVICE_JOB("Service", "JobScheduler Service"),
-    OP_WAKE_LOCK("Permission", "CPU Wake Lock"),
-    OP_SCHEDULED_ALARM("Alarm", "Alarm & Timer Wakeup"),
-    OP_RUN_IN_BACKGROUND("Permission", "Background Execution"),
-    BATTERY_OPTIMIZATION("Exemption", "Battery Optimization Whitelist")
+enum class WakeUpRiskLevel(val label: String, val badge: String) {
+    SAFE("Safe to Cut", "Zero Breakage"),
+    MODERATE("Caution", "May Stop Sync/Docs"),
+    RISKY("High Risk", "May Break Push/Calls")
+}
+
+enum class WakeUpPathType(val category: String, val defaultRisk: WakeUpRiskLevel) {
+    PROVIDER_DOCUMENTS("Provider", WakeUpRiskLevel.MODERATE),
+    PROVIDER_CONTENT("Provider", WakeUpRiskLevel.MODERATE),
+    SERVICE_SYNC_ADAPTER("SyncAdapter", WakeUpRiskLevel.MODERATE),
+    SERVICE_BACKGROUND("Service", WakeUpRiskLevel.MODERATE),
+    SERVICE_FOREGROUND("Service", WakeUpRiskLevel.RISKY),
+    SERVICE_JOB("JobScheduler", WakeUpRiskLevel.SAFE),
+    RECEIVER_BOOT("Boot Receiver", WakeUpRiskLevel.SAFE),
+    RECEIVER_CONNECTIVITY("Network Trigger", WakeUpRiskLevel.SAFE),
+    RECEIVER_POWER("Power Trigger", WakeUpRiskLevel.SAFE),
+    RECEIVER_USER_PRESENT("Screen Unlock", WakeUpRiskLevel.SAFE),
+    RECEIVER_TRACKER("Tracker / Telemetry", WakeUpRiskLevel.SAFE),
+    RECEIVER_PUSH("Push Notification", WakeUpRiskLevel.RISKY),
+    RECEIVER_PACKAGE("Package Update", WakeUpRiskLevel.SAFE),
+    RECEIVER_CUSTOM("Broadcast Receiver", WakeUpRiskLevel.SAFE),
+    OP_WAKE_LOCK("Permission", WakeUpRiskLevel.SAFE),
+    OP_SCHEDULED_ALARM("Alarm", WakeUpRiskLevel.SAFE),
+    OP_RUN_IN_BACKGROUND("Permission", WakeUpRiskLevel.SAFE),
+    BATTERY_OPTIMIZATION("Exemption", WakeUpRiskLevel.SAFE)
 }
 
 data class WakeUpPath(
@@ -33,6 +44,10 @@ data class WakeUpPath(
     val title: String,
     val componentName: String,
     val reason: String,
+    val riskLevel: WakeUpRiskLevel = WakeUpRiskLevel.SAFE,
+    val riskExplanation: String = "",
+    val isPrimaryCulprit: Boolean = false,
+    val isActiveVector: Boolean = false,
     val wakeupCount: Int = 0,
     val isCut: Boolean = false
 ) {
@@ -50,6 +65,10 @@ data class WakeUpDetails(
 ) {
     val cutPathsCount: Int get() = paths.count { it.isCut }
     val totalPathsCount: Int get() = paths.size
+    val safePathsCount: Int get() = paths.count { it.riskLevel == WakeUpRiskLevel.SAFE }
+    val moderatePathsCount: Int get() = paths.count { it.riskLevel == WakeUpRiskLevel.MODERATE }
+    val riskyPathsCount: Int get() = paths.count { it.riskLevel == WakeUpRiskLevel.RISKY }
+    val primaryCulpritsCount: Int get() = paths.count { it.isPrimaryCulprit || it.isActiveVector }
     val hasWakeLockPermission: Boolean get() = paths.any { it.type == WakeUpPathType.OP_WAKE_LOCK }
     val ignoresBatteryOptimizations: Boolean get() = paths.any { it.type == WakeUpPathType.BATTERY_OPTIMIZATION }
     val triggers: List<WakeUpPath> get() = paths

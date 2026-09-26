@@ -2,14 +2,17 @@ package com.example.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -22,47 +25,67 @@ import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.FolderShared
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RoomService
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Divider
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.data.OperatingMode
 import com.example.model.InstalledAppItem
 import com.example.model.WakeUpPath
 import com.example.model.WakeUpPathType
+import com.example.model.WakeUpRiskLevel
 import com.example.ui.components.AppIconImage
 import com.example.ui.components.AppStatusBadge
 import com.example.ui.theme.StateEvading
 import com.example.ui.theme.StateFree
 import com.example.ui.theme.StateWorking
+
+private enum class WakeUpFilterTab {
+    ALL,
+    SAFE,
+    MODERATE,
+    RISKY
+}
 
 @Composable
 fun WakeUpCutDialog(
@@ -70,191 +93,264 @@ fun WakeUpCutDialog(
     operatingMode: OperatingMode,
     onDismiss: () -> Unit,
     onTogglePath: (InstalledAppItem, WakeUpPath, Boolean) -> Unit,
+    onCutSafePaths: (InstalledAppItem) -> Unit,
     onCutAllPaths: (InstalledAppItem) -> Unit,
     onRestoreAllPaths: (InstalledAppItem) -> Unit,
     onForceStop: (InstalledAppItem) -> Unit
 ) {
     val wakeUpDetails = app.wakeUpDetails
     val paths = wakeUpDetails.paths
-    val isAllCut = wakeUpDetails.isCut || (paths.isNotEmpty() && paths.all { it.isCut })
+    var currentTab by remember { mutableStateOf(WakeUpFilterTab.ALL) }
 
-    AlertDialog(
+    val filteredPaths = remember(paths, currentTab) {
+        when (currentTab) {
+            WakeUpFilterTab.ALL -> paths
+            WakeUpFilterTab.SAFE -> paths.filter { it.riskLevel == WakeUpRiskLevel.SAFE }
+            WakeUpFilterTab.MODERATE -> paths.filter { it.riskLevel == WakeUpRiskLevel.MODERATE }
+            WakeUpFilterTab.RISKY -> paths.filter { it.riskLevel == WakeUpRiskLevel.RISKY }
+        }
+    }
+
+    // Use full width Dialog with usePlatformDefaultWidth = false to remove cramped narrow layout!
+    Dialog(
         onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surface,
-        modifier = Modifier.fillMaxWidth(0.96f),
-        title = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                AppIconImage(drawable = app.icon, appName = app.appName, size = 42.dp)
-                Spacer(modifier = Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = app.appName,
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1
-                    )
-                    Text(
-                        text = "Wake-Up Tracking & Path Cutoff",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        },
-        text = {
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = true
+        )
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.95f)
+                .fillMaxHeight(0.92f)
+                .padding(vertical = 12.dp),
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+            shadowElevation = 16.dp
+        ) {
             Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 520.dp)
+                    .fillMaxSize()
+                    .padding(horizontal = 20.dp, vertical = 16.dp)
             ) {
-                // Top status chip row
+                // Header: App Icon, App Name, Close Button
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    AppStatusBadge(state = app.state)
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(if (isAllCut) StateFree.copy(alpha = 0.15f) else StateEvading.copy(alpha = 0.15f))
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
+                    AppIconImage(drawable = app.icon, appName = app.appName, size = 46.dp)
+                    Spacer(modifier = Modifier.width(14.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = app.appName,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            AppStatusBadge(state = app.state)
+                        }
                         Text(
-                            text = if (isAllCut) "All Cut ✂️" else "${wakeUpDetails.cutPathsCount}/${paths.size} Cut",
+                            text = app.packageName,
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isAllCut) StateFree else StateEvading
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
                         )
                     }
+                    IconButton(onClick = onDismiss) {
+                        Icon(imageVector = Icons.Default.Close, contentDescription = "Close")
+                    }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-                // Stats Banner: Explains Android OS launch count & paths
+                // Stats Banner: Telemetry, Culprits, and Cut progress
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
-                    shape = RoundedCornerShape(12.dp)
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    ),
+                    shape = RoundedCornerShape(14.dp)
                 ) {
-                    Column(modifier = Modifier.padding(10.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceAround,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(
-                                    text = "${wakeUpDetails.wakeupCount24h}",
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Text(
-                                    text = "24h OS Launches",
-                                    fontSize = 10.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(
-                                    text = "${paths.size}",
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = "Detected Paths",
-                                    fontSize = 10.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(
-                                    text = "${wakeUpDetails.cutPathsCount}",
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (wakeUpDetails.cutPathsCount > 0) StateFree else StateEvading
-                                )
-                                Text(
-                                    text = "Paths Cut",
-                                    fontSize = 10.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceAround,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = "${wakeUpDetails.wakeupCount24h}",
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "24h Launches",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Box(modifier = Modifier.width(1.dp).height(28.dp).background(MaterialTheme.colorScheme.outlineVariant))
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = "${wakeUpDetails.primaryCulpritsCount}",
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (wakeUpDetails.primaryCulpritsCount > 0) Color(0xFFEA580C) else MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Autostart Vectors",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Box(modifier = Modifier.width(1.dp).height(28.dp).background(MaterialTheme.colorScheme.outlineVariant))
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = "${wakeUpDetails.cutPathsCount} / ${paths.size}",
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (wakeUpDetails.cutPathsCount > 0) StateFree else StateEvading
+                            )
+                            Text(
+                                text = "Paths Cut",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Master Cut Action Controls
+                // Quick Action Bar: Cut Safe Only, Cut All, Restore All
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Wake-Up Paths (${paths.size}):",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        if (paths.any { !it.isCut }) {
-                            OutlinedButton(
-                                onClick = { onCutAllPaths(app) },
-                                shape = RoundedCornerShape(8.dp),
-                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                            ) {
-                                Icon(imageVector = Icons.Default.ContentCut, contentDescription = null, modifier = Modifier.size(13.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(text = "Cut All", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
+                    if (wakeUpDetails.safePathsCount > 0 && paths.any { it.riskLevel == WakeUpRiskLevel.SAFE && !it.isCut }) {
+                        Button(
+                            onClick = { onCutSafePaths(app) },
+                            colors = ButtonDefaults.buttonColors(containerColor = StateFree),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.Shield, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(text = "Cut Safe (${wakeUpDetails.safePathsCount})", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
-                        if (paths.any { it.isCut }) {
-                            OutlinedButton(
-                                onClick = { onRestoreAllPaths(app) },
-                                shape = RoundedCornerShape(8.dp),
-                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                            ) {
-                                Icon(imageVector = Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(13.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(text = "Restore All", fontSize = 11.sp)
-                            }
+                    }
+                    if (paths.any { !it.isCut }) {
+                        OutlinedButton(
+                            onClick = { onCutAllPaths(app) },
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.ContentCut, contentDescription = null, modifier = Modifier.size(13.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(text = "Cut All (${paths.size})", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    if (paths.any { it.isCut }) {
+                        OutlinedButton(
+                            onClick = { onRestoreAllPaths(app) },
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(13.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(text = "Restore All", fontSize = 11.sp)
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
-                // Granular list of paths
-                if (paths.isEmpty()) {
+                // Risk Filter Tabs (Safe to Cut vs Caution vs Risky)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    FilterChip(
+                        selected = currentTab == WakeUpFilterTab.ALL,
+                        onClick = { currentTab = WakeUpFilterTab.ALL },
+                        label = { Text("All (${paths.size})", fontSize = 11.sp) },
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    FilterChip(
+                        selected = currentTab == WakeUpFilterTab.SAFE,
+                        onClick = { currentTab = WakeUpFilterTab.SAFE },
+                        label = {
+                            Text(
+                                text = "🛡️ Safe (${wakeUpDetails.safePathsCount})",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        },
+                        shape = RoundedCornerShape(8.dp),
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = StateFree.copy(alpha = 0.15f),
+                            selectedLabelColor = StateFree
+                        )
+                    )
+                    FilterChip(
+                        selected = currentTab == WakeUpFilterTab.MODERATE,
+                        onClick = { currentTab = WakeUpFilterTab.MODERATE },
+                        label = {
+                            Text(
+                                text = "⚠️ Sync/Providers (${wakeUpDetails.moderatePathsCount})",
+                                fontSize = 11.sp
+                            )
+                        },
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    FilterChip(
+                        selected = currentTab == WakeUpFilterTab.RISKY,
+                        onClick = { currentTab = WakeUpFilterTab.RISKY },
+                        label = {
+                            Text(
+                                text = "🚨 Push (${wakeUpDetails.riskyPathsCount})",
+                                fontSize = 11.sp
+                            )
+                        },
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Paths List
+                if (filteredPaths.isEmpty()) {
                     Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 24.dp),
+                            .weight(1f)
+                            .fillMaxWidth(),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "No persistent background wake-up vectors detected.",
-                            fontSize = 12.sp,
+                            text = "No wake-up vectors found under this filter category.",
+                            fontSize = 13.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 } else {
                     LazyColumn(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
+                            .weight(1f)
+                            .fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(paths, key = { it.id }) { path ->
-                            WakeUpPathItemRow(
+                        items(filteredPaths, key = { it.id }) { path ->
+                            DetailedWakeUpPathCard(
                                 path = path,
                                 onToggle = { isChecked ->
                                     onTogglePath(app, path, isChecked)
@@ -264,136 +360,189 @@ fun WakeUpCutDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(10.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                Spacer(modifier = Modifier.height(10.dp))
 
-                // Mode technical explanation
-                Text(
-                    text = if (operatingMode == OperatingMode.ROOT) {
-                        "⚡ Root Mode: Specific paths are disabled via system package manager (pm disable) and appops."
-                    } else {
-                        "🛡️ Non-Root Mode: Specific paths are blocked via background execution limits and automatic hibernate interceptors."
-                    },
-                    fontSize = 10.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    lineHeight = 14.sp
-                )
-            }
-        },
-        confirmButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = {
-                        onForceStop(app)
-                        onDismiss()
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = StateEvading),
-                    shape = RoundedCornerShape(8.dp)
+                // Bottom Action Footer: Force Stop & Done
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(imageVector = Icons.Default.StopCircle, contentDescription = null, modifier = Modifier.size(15.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(text = "Force Stop", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
-                Button(
-                    onClick = onDismiss,
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text(text = "Done", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        text = if (operatingMode == OperatingMode.ROOT) "⚡ Root: Direct 'pm disable' enforcement" else "🛡️ Non-Root: App background restrict mode",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = {
+                            onForceStop(app)
+                            onDismiss()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = StateEvading),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.StopCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(text = "Force Stop", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        Text(text = "Done", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }
-    )
+    }
 }
 
 @Composable
-private fun WakeUpPathItemRow(
+private fun DetailedWakeUpPathCard(
     path: WakeUpPath,
     onToggle: (Boolean) -> Unit
 ) {
     val icon = when (path.type) {
+        WakeUpPathType.PROVIDER_DOCUMENTS -> Icons.Default.FolderShared
+        WakeUpPathType.PROVIDER_CONTENT -> Icons.Default.FolderShared
+        WakeUpPathType.SERVICE_SYNC_ADAPTER -> Icons.Default.CloudSync
         WakeUpPathType.RECEIVER_BOOT -> Icons.Default.Bolt
         WakeUpPathType.RECEIVER_CONNECTIVITY -> Icons.Default.Wifi
         WakeUpPathType.RECEIVER_POWER -> Icons.Default.BatteryAlert
         WakeUpPathType.OP_SCHEDULED_ALARM -> Icons.Default.Alarm
+        WakeUpPathType.RECEIVER_TRACKER -> Icons.Default.Tune
+        WakeUpPathType.RECEIVER_PUSH,
+        WakeUpPathType.SERVICE_FOREGROUND -> Icons.Default.Notifications
         WakeUpPathType.SERVICE_BACKGROUND,
-        WakeUpPathType.SERVICE_FOREGROUND,
         WakeUpPathType.SERVICE_JOB -> Icons.Default.RoomService
         WakeUpPathType.OP_WAKE_LOCK -> Icons.Default.Lock
         WakeUpPathType.BATTERY_OPTIMIZATION -> Icons.Default.BatteryAlert
         else -> Icons.Default.Tune
     }
 
-    val categoryColor = when (path.type.category) {
-        "Receiver" -> MaterialTheme.colorScheme.primary
-        "Service" -> StateWorking
-        "Permission" -> StateEvading
-        "Alarm" -> Color(0xFFD97706)
-        else -> StateFree
+    val riskColor = when (path.riskLevel) {
+        WakeUpRiskLevel.SAFE -> StateFree
+        WakeUpRiskLevel.MODERATE -> Color(0xFFD97706)
+        WakeUpRiskLevel.RISKY -> StateEvading
+    }
+
+    val riskBg = when (path.riskLevel) {
+        WakeUpRiskLevel.SAFE -> StateFree.copy(alpha = 0.12f)
+        WakeUpRiskLevel.MODERATE -> Color(0xFFFEF3C7)
+        WakeUpRiskLevel.RISKY -> StateEvading.copy(alpha = 0.12f)
     }
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(12.dp))
             .border(
                 width = 1.dp,
-                color = if (path.isCut) StateFree.copy(alpha = 0.4f) else MaterialTheme.colorScheme.outlineVariant,
-                shape = RoundedCornerShape(10.dp)
+                color = when {
+                    path.isActiveVector -> Color(0xFFEA580C)
+                    path.isCut -> StateFree.copy(alpha = 0.45f)
+                    else -> MaterialTheme.colorScheme.outlineVariant
+                },
+                shape = RoundedCornerShape(12.dp)
             ),
         colors = CardDefaults.cardColors(
-            containerColor = if (path.isCut) StateFree.copy(alpha = 0.05f) else MaterialTheme.colorScheme.surface
-        )
+            containerColor = when {
+                path.isActiveVector -> Color(0xFFFFF7ED)
+                path.isCut -> StateFree.copy(alpha = 0.05f)
+                else -> MaterialTheme.colorScheme.surface
+            }
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(10.dp),
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Icon
             Box(
                 modifier = Modifier
-                    .size(34.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(if (path.isCut) StateFree.copy(alpha = 0.15f) else categoryColor.copy(alpha = 0.12f)),
+                    .size(38.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (path.isCut) StateFree.copy(alpha = 0.15f) else riskBg),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = if (path.isCut) Icons.Default.ContentCut else icon,
                     contentDescription = null,
-                    tint = if (path.isCut) StateFree else categoryColor,
-                    modifier = Modifier.size(18.dp)
+                    tint = if (path.isCut) StateFree else riskColor,
+                    modifier = Modifier.size(20.dp)
                 )
             }
 
-            Spacer(modifier = Modifier.width(10.dp))
+            Spacer(modifier = Modifier.width(12.dp))
 
+            // Body
             Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                // Top Tag Row: Category, Active Cause Flame, Risk Badge
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    if (path.isActiveVector || path.isPrimaryCulprit) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color(0xFFEA580C).copy(alpha = 0.15f))
+                                .padding(horizontal = 5.dp, vertical = 1.dp)
+                        ) {
+                            Text(
+                                text = "ACTIVE VECTOR 🔥",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFEA580C)
+                            )
+                        }
+                    }
+
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(4.dp))
-                            .background(categoryColor.copy(alpha = 0.12f))
+                            .background(riskBg)
                             .padding(horizontal = 5.dp, vertical = 1.dp)
                     ) {
                         Text(
-                            text = path.type.category.uppercase(),
+                            text = path.riskLevel.label.uppercase(),
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Bold,
-                            color = categoryColor
+                            color = riskColor
                         )
                     }
-                    Spacer(modifier = Modifier.width(6.dp))
+
                     Text(
-                        text = path.title,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1
+                        text = path.type.category,
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
+                Spacer(modifier = Modifier.height(3.dp))
+
+                // Title
+                Text(
+                    text = path.title,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+
                 Spacer(modifier = Modifier.height(2.dp))
 
+                // Reason
                 Text(
                     text = path.reason,
                     fontSize = 11.sp,
@@ -401,33 +550,46 @@ private fun WakeUpPathItemRow(
                     lineHeight = 15.sp
                 )
 
+                // Risk & Breakage Explanation
+                if (path.riskExplanation.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        text = "Impact: ${path.riskExplanation}",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = riskColor,
+                        lineHeight = 14.sp
+                    )
+                }
+
+                // Component Name
                 if (path.componentName.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(2.dp))
+                    Spacer(modifier = Modifier.height(3.dp))
                     Text(
                         text = path.componentName,
-                        fontSize = 9.sp,
+                        fontSize = 10.sp,
                         fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
                         maxLines = 1
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(10.dp))
 
-            // Cut toggle switch for this specific path
+            // Switch Cut Toggle
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Switch(
                     checked = path.isCut,
                     onCheckedChange = onToggle,
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = StateFree,
-                        checkedTrackColor = StateFree.copy(alpha = 0.3f)
+                        checkedTrackColor = StateFree.copy(alpha = 0.35f)
                     )
                 )
                 Text(
-                    text = if (path.isCut) "Cut" else "Active",
-                    fontSize = 9.sp,
+                    text = if (path.isCut) "Cut ✂️" else "Active",
+                    fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
                     color = if (path.isCut) StateFree else StateEvading
                 )

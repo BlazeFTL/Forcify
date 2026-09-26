@@ -250,7 +250,8 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                     val packages = pm.getInstalledPackages(
                         PackageManager.GET_PERMISSIONS or
                         PackageManager.GET_RECEIVERS or
-                        PackageManager.GET_SERVICES
+                        PackageManager.GET_SERVICES or
+                        PackageManager.GET_PROVIDERS
                     )
 
                     val isRoot = preferences.mode == OperatingMode.ROOT
@@ -442,6 +443,38 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
             }
 
             _statusMessage.value = "Cut all ${app.wakeUpDetails.paths.size} wake-up paths for ${app.appName}"
+            refreshApps(silent = true)
+        }
+    }
+
+    fun cutSafeWakeUpPaths(app: InstalledAppItem) {
+        viewModelScope.launch {
+            val safePaths = app.wakeUpDetails.paths.filter { it.riskLevel == com.example.model.WakeUpRiskLevel.SAFE }
+            val safePathIds = safePaths.map { it.id }.toSet()
+            val currentCut = preferences.getCutPathsForPackage(app.packageName).toMutableSet()
+            currentCut.addAll(safePathIds)
+            preferences.setCutPathsForPackage(app.packageName, currentCut)
+
+            if (preferences.mode == OperatingMode.ROOT) {
+                for (p in safePaths) {
+                    RootExecutor.cutSpecificWakeUpPath(p)
+                }
+            }
+
+            val currentSelected = _selectedAppForWakeup.value
+            if (currentSelected != null && currentSelected.packageName == app.packageName) {
+                val updatedPaths = currentSelected.wakeUpDetails.paths.map {
+                    if (it.riskLevel == com.example.model.WakeUpRiskLevel.SAFE) it.copy(isCut = true) else it
+                }
+                _selectedAppForWakeup.value = currentSelected.copy(
+                    wakeUpDetails = currentSelected.wakeUpDetails.copy(
+                        paths = updatedPaths,
+                        isCut = updatedPaths.all { it.isCut }
+                    )
+                )
+            }
+
+            _statusMessage.value = "Cut ${safePaths.size} safe wake-up paths for ${app.appName}"
             refreshApps(silent = true)
         }
     }

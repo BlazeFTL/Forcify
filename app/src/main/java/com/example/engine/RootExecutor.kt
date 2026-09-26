@@ -11,7 +11,8 @@ data class RootProcessState(
     val isRunning: Boolean = false,
     val isForegroundService: Boolean = false,
     val isTop: Boolean = false,
-    val pid: Int? = null
+    val pid: Int? = null,
+    val activeComponents: Set<String> = emptySet()
 )
 
 object RootExecutor {
@@ -124,18 +125,26 @@ object RootExecutor {
                 }
             }
 
-            // 2. dumpsys activity services (to find active foreground services e.g. IDM+)
+            // 2. dumpsys activity services (find active services and components causing wakeups)
             val svcRes = executeCommand("dumpsys activity services")
             if (svcRes.isSuccess) {
                 val output = svcRes.getOrNull() ?: ""
                 var currentPkg: String? = null
+                var currentComp: String? = null
                 for (line in output.lines()) {
                     if (line.contains("* ServiceRecord{")) {
-                        val match = Regex("u0\\s+([a-zA-Z0-9._]+)/").find(line)
+                        val match = Regex("u0\\s+([a-zA-Z0-9._]+)/([a-zA-Z0-9._]+)").find(line)
                         currentPkg = match?.groupValues?.get(1)
+                        val shortComp = match?.groupValues?.get(2)
+                        currentComp = if (currentPkg != null && shortComp != null) {
+                            if (shortComp.startsWith(".")) "$currentPkg$shortComp" else shortComp
+                        } else null
+
                         if (currentPkg != null) {
                             val prev = map[currentPkg] ?: RootProcessState(isRunning = true)
-                            map[currentPkg] = prev.copy(isRunning = true)
+                            val compSet = prev.activeComponents.toMutableSet()
+                            if (currentComp != null) compSet.add(currentComp)
+                            map[currentPkg] = prev.copy(isRunning = true, activeComponents = compSet)
                         }
                     }
                     if (currentPkg != null && (line.contains("isForeground=true") || line.contains("foregroundServiceType"))) {
@@ -145,7 +154,30 @@ object RootExecutor {
                 }
             }
 
-            // 3. dumpsys activity processes (to check TOP/FOREGROUND)
+            // 3. dumpsys activity providers (find active providers causing wakeups e.g. TeraBoxProvider)
+            val provRes = executeCommand("dumpsys activity providers")
+            if (provRes.isSuccess) {
+                val output = provRes.getOrNull() ?: ""
+                for (line in output.lines()) {
+                    if (line.contains("* ContentProviderRecord{")) {
+                        val match = Regex("u0\\s+([a-zA-Z0-9._]+)/([a-zA-Z0-9._]+)").find(line)
+                        val pkg = match?.groupValues?.get(1)
+                        val shortComp = match?.groupValues?.get(2)
+                        val compName = if (pkg != null && shortComp != null) {
+                            if (shortComp.startsWith(".")) "$pkg$shortComp" else shortComp
+                        } else null
+
+                        if (pkg != null) {
+                            val prev = map[pkg] ?: RootProcessState(isRunning = true)
+                            val compSet = prev.activeComponents.toMutableSet()
+                            if (compName != null) compSet.add(compName)
+                            map[pkg] = prev.copy(isRunning = true, activeComponents = compSet)
+                        }
+                    }
+                }
+            }
+
+            // 4. dumpsys activity processes (check TOP/FOREGROUND)
             val procRes = executeCommand("dumpsys activity processes")
             if (procRes.isSuccess) {
                 val output = procRes.getOrNull() ?: ""
@@ -203,15 +235,21 @@ object RootExecutor {
     suspend fun cutSpecificWakeUpPath(path: com.example.model.WakeUpPath): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             when (path.type) {
+                com.example.model.WakeUpPathType.PROVIDER_DOCUMENTS,
+                com.example.model.WakeUpPathType.PROVIDER_CONTENT,
+                com.example.model.WakeUpPathType.SERVICE_SYNC_ADAPTER,
                 com.example.model.WakeUpPathType.RECEIVER_BOOT,
                 com.example.model.WakeUpPathType.RECEIVER_CONNECTIVITY,
                 com.example.model.WakeUpPathType.RECEIVER_POWER,
                 com.example.model.WakeUpPathType.RECEIVER_USER_PRESENT,
+                com.example.model.WakeUpPathType.RECEIVER_TRACKER,
+                com.example.model.WakeUpPathType.RECEIVER_PUSH,
                 com.example.model.WakeUpPathType.RECEIVER_PACKAGE,
                 com.example.model.WakeUpPathType.RECEIVER_CUSTOM,
                 com.example.model.WakeUpPathType.SERVICE_BACKGROUND,
                 com.example.model.WakeUpPathType.SERVICE_FOREGROUND,
                 com.example.model.WakeUpPathType.SERVICE_JOB -> {
+                    // Disable specific component at system level using pm disable
                     executeCommand("pm disable ${path.componentName}")
                 }
                 com.example.model.WakeUpPathType.OP_WAKE_LOCK -> {
@@ -236,10 +274,15 @@ object RootExecutor {
     suspend fun restoreSpecificWakeUpPath(path: com.example.model.WakeUpPath): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             when (path.type) {
+                com.example.model.WakeUpPathType.PROVIDER_DOCUMENTS,
+                com.example.model.WakeUpPathType.PROVIDER_CONTENT,
+                com.example.model.WakeUpPathType.SERVICE_SYNC_ADAPTER,
                 com.example.model.WakeUpPathType.RECEIVER_BOOT,
                 com.example.model.WakeUpPathType.RECEIVER_CONNECTIVITY,
                 com.example.model.WakeUpPathType.RECEIVER_POWER,
                 com.example.model.WakeUpPathType.RECEIVER_USER_PRESENT,
+                com.example.model.WakeUpPathType.RECEIVER_TRACKER,
+                com.example.model.WakeUpPathType.RECEIVER_PUSH,
                 com.example.model.WakeUpPathType.RECEIVER_PACKAGE,
                 com.example.model.WakeUpPathType.RECEIVER_CUSTOM,
                 com.example.model.WakeUpPathType.SERVICE_BACKGROUND,

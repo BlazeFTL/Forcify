@@ -18,6 +18,7 @@ import com.example.model.InstalledAppItem
 import com.example.model.WakeUpDetails
 import com.example.model.WakeUpPath
 import com.example.model.WakeUpPathType
+import com.example.model.WakeUpRiskLevel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -176,7 +177,17 @@ class AppStatusDetector(private val context: Context) {
         val isAppCut = cutPackages.contains(pkg)
         val cutPathIds = cutPathsMap[pkg] ?: emptySet()
 
-        val paths = detectWakeUpPaths(pkgInfo, cutPathIds, isAppCut, wakeupCount, isIgnoredBattery)
+        val rootState = rootProcessMap[pkg]
+        val activeComponents = rootState?.activeComponents ?: emptySet()
+
+        val paths = detectWakeUpPaths(
+            pkgInfo = pkgInfo,
+            cutPathIds = cutPathIds,
+            isAppCut = isAppCut,
+            totalWakeupCount = wakeupCount,
+            isIgnoredBattery = isIgnoredBattery,
+            activeComponents = activeComponents
+        )
 
         val wakeUpDetails = WakeUpDetails(
             wakeupCount24h = wakeupCount,
@@ -184,7 +195,6 @@ class AppStatusDetector(private val context: Context) {
             isCut = isAppCut || (paths.isNotEmpty() && paths.all { it.isCut })
         )
 
-        val rootState = rootProcessMap[pkg]
         val nonRootActivity = nonRootActivityMap[pkg]
         val runningProc = runningMap[pkg]
 
@@ -306,12 +316,160 @@ class AppStatusDetector(private val context: Context) {
         cutPathIds: Set<String>,
         isAppCut: Boolean,
         totalWakeupCount: Int,
-        isIgnoredBattery: Boolean
+        isIgnoredBattery: Boolean,
+        activeComponents: Set<String>
     ): List<WakeUpPath> {
         val list = mutableListOf<WakeUpPath>()
         val pkg = pkgInfo.packageName
 
-        // 1. Receivers
+        // 1. Content Providers (Major culprit behind silent app autostart like TeraBoxProvider, DocumentsProvider)
+        val providers = pkgInfo.providers ?: emptyArray()
+        for (provider in providers) {
+            val simpleName = provider.name.substringAfterLast('.')
+            val fullName = if (provider.name.startsWith(".")) "$pkg${provider.name}" else provider.name
+            val authority = provider.authority ?: ""
+            val id = "$pkg:provider:$fullName"
+            val isCut = isAppCut || cutPathIds.contains(id)
+            val isCurrentlyActive = activeComponents.contains(fullName) || activeComponents.any { it.contains(simpleName) }
+
+            val isDocsProvider = authority.contains("documents", ignoreCase = true) ||
+                simpleName.contains("Documents", ignoreCase = true) ||
+                simpleName.contains("Drive", ignoreCase = true) ||
+                simpleName.contains("File", ignoreCase = true)
+
+            val isSyncProvider = authority.contains("sync", ignoreCase = true) ||
+                simpleName.contains("Sync", ignoreCase = true)
+
+            if (isDocsProvider) {
+                list.add(
+                    WakeUpPath(
+                        id = id,
+                        packageName = pkg,
+                        type = WakeUpPathType.PROVIDER_DOCUMENTS,
+                        title = "Documents Provider ($simpleName)",
+                        componentName = fullName,
+                        reason = "Android launches app process automatically whenever system storage or file picker queries document providers",
+                        riskLevel = WakeUpRiskLevel.MODERATE,
+                        riskExplanation = "Cutting stops autostart when browsing files; app files won't show in system file picker until app is launched",
+                        isPrimaryCulprit = true,
+                        isActiveVector = isCurrentlyActive,
+                        wakeupCount = if (totalWakeupCount > 0) totalWakeupCount else 1,
+                        isCut = isCut
+                    )
+                )
+            } else if (isSyncProvider || provider.exported) {
+                list.add(
+                    WakeUpPath(
+                        id = id,
+                        packageName = pkg,
+                        type = WakeUpPathType.PROVIDER_CONTENT,
+                        title = "Content Provider ($simpleName)",
+                        componentName = fullName,
+                        reason = "Exported URI authority '$authority' accessed by system or external apps, triggering silent process launch",
+                        riskLevel = WakeUpRiskLevel.MODERATE,
+                        riskExplanation = "Cutting prevents other apps or system queries from launching this app in background",
+                        isPrimaryCulprit = isCurrentlyActive || isSyncProvider,
+                        isActiveVector = isCurrentlyActive,
+                        wakeupCount = 0,
+                        isCut = isCut
+                    )
+                )
+            }
+        }
+
+        // 2. Services (SyncAdapters, JobScheduler, Workers, Background Services)
+        val services = pkgInfo.services ?: emptyArray()
+        for (service in services) {
+            val simpleName = service.name.substringAfterLast('.')
+            val fullName = if (service.name.startsWith(".")) "$pkg${service.name}" else service.name
+            val id = "$pkg:service:$fullName"
+            val isCut = isAppCut || cutPathIds.contains(id)
+            val isCurrentlyActive = activeComponents.contains(fullName) || activeComponents.any { it.contains(simpleName) }
+
+            val isSyncAdapter = simpleName.contains("Sync", ignoreCase = true) ||
+                simpleName.contains("Account", ignoreCase = true) ||
+                simpleName.contains("Authenticator", ignoreCase = true)
+
+            val isJob = simpleName.contains("Job", ignoreCase = true) ||
+                simpleName.contains("Work", ignoreCase = true) ||
+                simpleName.contains("GcmTask", ignoreCase = true)
+
+            val isPush = simpleName.contains("Push", ignoreCase = true) ||
+                simpleName.contains("Fcm", ignoreCase = true) ||
+                simpleName.contains("Messaging", ignoreCase = true)
+
+            if (isSyncAdapter) {
+                list.add(
+                    WakeUpPath(
+                        id = id,
+                        packageName = pkg,
+                        type = WakeUpPathType.SERVICE_SYNC_ADAPTER,
+                        title = "Account SyncAdapter ($simpleName)",
+                        componentName = fullName,
+                        reason = "Android AccountManager / SyncManager automatically schedules and wakes this service to run background account synchronization",
+                        riskLevel = WakeUpRiskLevel.MODERATE,
+                        riskExplanation = "Cutting stops automatic cloud sync in background; manual refresh still works inside app",
+                        isPrimaryCulprit = true,
+                        isActiveVector = isCurrentlyActive,
+                        wakeupCount = if (totalWakeupCount > 0) totalWakeupCount else 1,
+                        isCut = isCut
+                    )
+                )
+            } else if (isJob) {
+                list.add(
+                    WakeUpPath(
+                        id = id,
+                        packageName = pkg,
+                        type = WakeUpPathType.SERVICE_JOB,
+                        title = "JobScheduler ($simpleName)",
+                        componentName = fullName,
+                        reason = "Scheduled periodic worker invoked by Android JobScheduler under network or idle conditions",
+                        riskLevel = WakeUpRiskLevel.SAFE,
+                        riskExplanation = "Safe to cut: prevents periodic background jobs from running unprompted",
+                        isPrimaryCulprit = isCurrentlyActive,
+                        isActiveVector = isCurrentlyActive,
+                        wakeupCount = 0,
+                        isCut = isCut
+                    )
+                )
+            } else if (isPush) {
+                list.add(
+                    WakeUpPath(
+                        id = id,
+                        packageName = pkg,
+                        type = WakeUpPathType.SERVICE_FOREGROUND,
+                        title = "Push Service ($simpleName)",
+                        componentName = fullName,
+                        reason = "Persistent messaging service responsible for processing real-time notifications",
+                        riskLevel = WakeUpRiskLevel.RISKY,
+                        riskExplanation = "High Risk: cutting this service will prevent or delay new incoming push notifications",
+                        isPrimaryCulprit = isCurrentlyActive,
+                        isActiveVector = isCurrentlyActive,
+                        wakeupCount = 0,
+                        isCut = isCut
+                    )
+                )
+            } else if (service.exported || isCurrentlyActive || simpleName.contains("Download", ignoreCase = true) || simpleName.contains("Worker", ignoreCase = true)) {
+                list.add(
+                    WakeUpPath(
+                        id = id,
+                        packageName = pkg,
+                        type = WakeUpPathType.SERVICE_BACKGROUND,
+                        title = "Background Service ($simpleName)",
+                        componentName = fullName,
+                        reason = "Background worker service running tasks or listening for intent triggers",
+                        riskLevel = WakeUpRiskLevel.MODERATE,
+                        riskExplanation = "Stops background processing for this worker",
+                        isPrimaryCulprit = isCurrentlyActive,
+                        isActiveVector = isCurrentlyActive,
+                        wakeupCount = 0,
+                        isCut = isCut
+                    )
+                )
+            }
+        }
+
+        // 3. Broadcast Receivers (Filter out noise, highlight real autostart culprits)
         val receivers = pkgInfo.receivers ?: emptyArray()
         for (receiver in receivers) {
             val simpleName = receiver.name.substringAfterLast('.')
@@ -319,95 +477,146 @@ class AppStatusDetector(private val context: Context) {
             val id = "$pkg:receiver:$fullName"
             val isCut = isAppCut || cutPathIds.contains(id)
 
-            when {
-                simpleName.contains("Boot", ignoreCase = true) || simpleName.contains("Startup", ignoreCase = true) -> {
-                    list.add(
-                        WakeUpPath(
-                            id = id,
-                            packageName = pkg,
-                            type = WakeUpPathType.RECEIVER_BOOT,
-                            title = "Boot Receiver ($simpleName)",
-                            componentName = fullName,
-                            reason = "Automatically launches app in background when phone is turned on or restarted",
-                            wakeupCount = if (totalWakeupCount > 0) 1 else 0,
-                            isCut = isCut
-                        )
+            val isBoot = simpleName.contains("Boot", ignoreCase = true) ||
+                simpleName.contains("Startup", ignoreCase = true) ||
+                simpleName.contains("Reboot", ignoreCase = true)
+
+            val isNetwork = simpleName.contains("Network", ignoreCase = true) ||
+                simpleName.contains("Connectivity", ignoreCase = true) ||
+                simpleName.contains("Wifi", ignoreCase = true)
+
+            val isAlarm = simpleName.contains("Alarm", ignoreCase = true) ||
+                simpleName.contains("Timer", ignoreCase = true) ||
+                simpleName.contains("Scheduler", ignoreCase = true)
+
+            val isPower = simpleName.contains("Power", ignoreCase = true) ||
+                simpleName.contains("Battery", ignoreCase = true) ||
+                simpleName.contains("Charger", ignoreCase = true)
+
+            val isTracker = simpleName.contains("Analytics", ignoreCase = true) ||
+                simpleName.contains("Tracker", ignoreCase = true) ||
+                simpleName.contains("Measurement", ignoreCase = true) ||
+                simpleName.contains("InstallReferrer", ignoreCase = true) ||
+                simpleName.contains("Facebook", ignoreCase = true) ||
+                simpleName.contains("AppsFlyer", ignoreCase = true) ||
+                simpleName.contains("Adjust", ignoreCase = true)
+
+            val isPush = simpleName.contains("Push", ignoreCase = true) ||
+                simpleName.contains("FirebaseInstanceId", ignoreCase = true) ||
+                simpleName.contains("Fcm", ignoreCase = true) ||
+                simpleName.contains("C2dm", ignoreCase = true) ||
+                simpleName.contains("Notification", ignoreCase = true)
+
+            if (isBoot) {
+                list.add(
+                    WakeUpPath(
+                        id = id,
+                        packageName = pkg,
+                        type = WakeUpPathType.RECEIVER_BOOT,
+                        title = "Boot Autostart ($simpleName)",
+                        componentName = fullName,
+                        reason = "Automatically launches app immediately when the phone powers on or restarts",
+                        riskLevel = WakeUpRiskLevel.SAFE,
+                        riskExplanation = "Safe to cut: completely prevents app from starting up on reboot",
+                        isPrimaryCulprit = true,
+                        wakeupCount = 1,
+                        isCut = isCut
                     )
-                }
-                simpleName.contains("Network", ignoreCase = true) || simpleName.contains("Connectivity", ignoreCase = true) -> {
-                    list.add(
-                        WakeUpPath(
-                            id = id,
-                            packageName = pkg,
-                            type = WakeUpPathType.RECEIVER_CONNECTIVITY,
-                            title = "Connectivity Trigger ($simpleName)",
-                            componentName = fullName,
-                            reason = "Wakes app whenever Wi-Fi or mobile data state toggles or connects",
-                            wakeupCount = if (totalWakeupCount > 2) totalWakeupCount / 3 else 0,
-                            isCut = isCut
-                        )
+                )
+            } else if (isNetwork) {
+                list.add(
+                    WakeUpPath(
+                        id = id,
+                        packageName = pkg,
+                        type = WakeUpPathType.RECEIVER_CONNECTIVITY,
+                        title = "Network Trigger ($simpleName)",
+                        componentName = fullName,
+                        reason = "Wakes app whenever Wi-Fi or cellular network state toggles or reconnects",
+                        riskLevel = WakeUpRiskLevel.SAFE,
+                        riskExplanation = "Safe to cut: stops background keepalive pings on network transitions",
+                        wakeupCount = if (totalWakeupCount > 0) totalWakeupCount / 3 else 0,
+                        isCut = isCut
                     )
-                }
-                simpleName.contains("Alarm", ignoreCase = true) || simpleName.contains("Timer", ignoreCase = true) -> {
-                    list.add(
-                        WakeUpPath(
-                            id = id,
-                            packageName = pkg,
-                            type = WakeUpPathType.OP_SCHEDULED_ALARM,
-                            title = "Alarm Receiver ($simpleName)",
-                            componentName = fullName,
-                            reason = "Fires scheduled alarms waking the app from sleep to execute tasks",
-                            wakeupCount = if (totalWakeupCount > 0) totalWakeupCount / 2 else 0,
-                            isCut = isCut
-                        )
+                )
+            } else if (isAlarm) {
+                list.add(
+                    WakeUpPath(
+                        id = id,
+                        packageName = pkg,
+                        type = WakeUpPathType.OP_SCHEDULED_ALARM,
+                        title = "Alarm Wakeup ($simpleName)",
+                        componentName = fullName,
+                        reason = "Receives scheduled alarms that wake app from CPU sleep to execute tasks",
+                        riskLevel = WakeUpRiskLevel.SAFE,
+                        riskExplanation = "Safe to cut: silences non-critical timer wake-ups",
+                        wakeupCount = if (totalWakeupCount > 0) totalWakeupCount / 2 else 0,
+                        isCut = isCut
                     )
-                }
-                simpleName.contains("Power", ignoreCase = true) || simpleName.contains("Battery", ignoreCase = true) -> {
-                    list.add(
-                        WakeUpPath(
-                            id = id,
-                            packageName = pkg,
-                            type = WakeUpPathType.RECEIVER_POWER,
-                            title = "Power Trigger ($simpleName)",
-                            componentName = fullName,
-                            reason = "Wakes app when charger is connected or battery level changes",
-                            wakeupCount = 0,
-                            isCut = isCut
-                        )
+                )
+            } else if (isPower) {
+                list.add(
+                    WakeUpPath(
+                        id = id,
+                        packageName = pkg,
+                        type = WakeUpPathType.RECEIVER_POWER,
+                        title = "Power Trigger ($simpleName)",
+                        componentName = fullName,
+                        reason = "Wakes app when charger is plugged in or battery enters low power mode",
+                        riskLevel = WakeUpRiskLevel.SAFE,
+                        riskExplanation = "Safe to cut: stops background sync on charger connect",
+                        wakeupCount = 0,
+                        isCut = isCut
                     )
-                }
-                simpleName.contains("Package", ignoreCase = true) || simpleName.contains("Install", ignoreCase = true) -> {
-                    list.add(
-                        WakeUpPath(
-                            id = id,
-                            packageName = pkg,
-                            type = WakeUpPathType.RECEIVER_PACKAGE,
-                            title = "Package Trigger ($simpleName)",
-                            componentName = fullName,
-                            reason = "Wakes app whenever other apps or this app are updated or installed",
-                            wakeupCount = 0,
-                            isCut = isCut
-                        )
+                )
+            } else if (isTracker) {
+                list.add(
+                    WakeUpPath(
+                        id = id,
+                        packageName = pkg,
+                        type = WakeUpPathType.RECEIVER_TRACKER,
+                        title = "Analytics Tracker ($simpleName)",
+                        componentName = fullName,
+                        reason = "Background telemetry beacon sending usage metrics and analytics events",
+                        riskLevel = WakeUpRiskLevel.SAFE,
+                        riskExplanation = "Safe to cut: saves battery and network by blocking analytics autostart",
+                        wakeupCount = 0,
+                        isCut = isCut
                     )
-                }
-                else -> {
-                    list.add(
-                        WakeUpPath(
-                            id = id,
-                            packageName = pkg,
-                            type = WakeUpPathType.RECEIVER_CUSTOM,
-                            title = "Broadcast Receiver ($simpleName)",
-                            componentName = fullName,
-                            reason = "Listens for broadcast intents to launch app components",
-                            wakeupCount = 0,
-                            isCut = isCut
-                        )
+                )
+            } else if (isPush) {
+                list.add(
+                    WakeUpPath(
+                        id = id,
+                        packageName = pkg,
+                        type = WakeUpPathType.RECEIVER_PUSH,
+                        title = "Push Notification Receiver ($simpleName)",
+                        componentName = fullName,
+                        reason = "Receives cloud push messages and triggers notifications",
+                        riskLevel = WakeUpRiskLevel.RISKY,
+                        riskExplanation = "High Risk: cutting this will stop incoming push notifications for this app",
+                        wakeupCount = 0,
+                        isCut = isCut
                     )
-                }
+                )
+            } else if (receiver.exported) {
+                list.add(
+                    WakeUpPath(
+                        id = id,
+                        packageName = pkg,
+                        type = WakeUpPathType.RECEIVER_CUSTOM,
+                        title = "Exported Receiver ($simpleName)",
+                        componentName = fullName,
+                        reason = "Public broadcast receiver listening for system or third-party intents",
+                        riskLevel = WakeUpRiskLevel.SAFE,
+                        riskExplanation = "Safe to cut: isolates app from external intent broadcasts",
+                        wakeupCount = 0,
+                        isCut = isCut
+                    )
+                )
             }
         }
 
-        // If RECEIVE_BOOT_COMPLETED is requested but not in receivers list
+        // If RECEIVE_BOOT_COMPLETED is declared but no specific receiver caught above
         if (pkgInfo.requestedPermissions?.contains("android.permission.RECEIVE_BOOT_COMPLETED") == true &&
             list.none { it.type == WakeUpPathType.RECEIVER_BOOT }
         ) {
@@ -420,70 +629,16 @@ class AppStatusDetector(private val context: Context) {
                     title = "Boot Permission",
                     componentName = "android.permission.RECEIVE_BOOT_COMPLETED",
                     reason = "Allows app to start automatically upon device boot",
+                    riskLevel = WakeUpRiskLevel.SAFE,
+                    riskExplanation = "Safe to cut: blocks boot autostart permission",
+                    isPrimaryCulprit = true,
                     wakeupCount = 1,
                     isCut = isAppCut || cutPathIds.contains(id)
                 )
             )
         }
 
-        // 2. Services
-        val services = pkgInfo.services ?: emptyArray()
-        for (service in services) {
-            val simpleName = service.name.substringAfterLast('.')
-            val fullName = if (service.name.startsWith(".")) "$pkg${service.name}" else service.name
-            val id = "$pkg:service:$fullName"
-            val isCut = isAppCut || cutPathIds.contains(id)
-
-            when {
-                simpleName.contains("Job", ignoreCase = true) || simpleName.contains("Work", ignoreCase = true) -> {
-                    list.add(
-                        WakeUpPath(
-                            id = id,
-                            packageName = pkg,
-                            type = WakeUpPathType.SERVICE_JOB,
-                            title = "JobService ($simpleName)",
-                            componentName = fullName,
-                            reason = "Executed by Android JobScheduler when network or idle conditions are met",
-                            wakeupCount = if (totalWakeupCount > 4) totalWakeupCount / 4 else 0,
-                            isCut = isCut
-                        )
-                    )
-                }
-                simpleName.contains("Download", ignoreCase = true) ||
-                simpleName.contains("Sync", ignoreCase = true) ||
-                simpleName.contains("Transfer", ignoreCase = true) ||
-                simpleName.contains("Push", ignoreCase = true) -> {
-                    list.add(
-                        WakeUpPath(
-                            id = id,
-                            packageName = pkg,
-                            type = WakeUpPathType.SERVICE_BACKGROUND,
-                            title = "Background Worker ($simpleName)",
-                            componentName = fullName,
-                            reason = "Runs continuous background tasks, sync routines, or download transfers",
-                            wakeupCount = if (totalWakeupCount > 0) totalWakeupCount else 0,
-                            isCut = isCut
-                        )
-                    )
-                }
-                else -> {
-                    list.add(
-                        WakeUpPath(
-                            id = id,
-                            packageName = pkg,
-                            type = WakeUpPathType.SERVICE_BACKGROUND,
-                            title = "Background Service ($simpleName)",
-                            componentName = fullName,
-                            reason = "Declared service component capable of running in background",
-                            wakeupCount = 0,
-                            isCut = isCut
-                        )
-                    )
-                }
-            }
-        }
-
-        // 3. Permissions & Schedulers
+        // 4. Permissions & Schedulers
         if (pkgInfo.requestedPermissions?.contains("android.permission.WAKE_LOCK") == true) {
             val id = "$pkg:perm:wakelock"
             list.add(
@@ -493,7 +648,10 @@ class AppStatusDetector(private val context: Context) {
                     type = WakeUpPathType.OP_WAKE_LOCK,
                     title = "CPU Wake Lock",
                     componentName = "android.permission.WAKE_LOCK",
-                    reason = "Allows app to prevent CPU from sleeping, keeping processes active during screen off",
+                    reason = "Allows app to prevent device CPU from sleeping during screen off",
+                    riskLevel = WakeUpRiskLevel.SAFE,
+                    riskExplanation = "Safe to cut: allows device to enter deep sleep without CPU battery drain",
+                    isPrimaryCulprit = false,
                     wakeupCount = totalWakeupCount,
                     isCut = isAppCut || cutPathIds.contains(id)
                 )
@@ -512,6 +670,8 @@ class AppStatusDetector(private val context: Context) {
                     title = "Exact Alarm Scheduler",
                     componentName = "android.permission.SCHEDULE_EXACT_ALARM",
                     reason = "Triggers high-priority alarms at precise millisecond times waking the device",
+                    riskLevel = WakeUpRiskLevel.SAFE,
+                    riskExplanation = "Safe to cut: prevents exact timer wake-ups while device is sleeping",
                     wakeupCount = if (totalWakeupCount > 0) totalWakeupCount / 2 else 0,
                     isCut = isAppCut || cutPathIds.contains(id)
                 )
@@ -528,11 +688,21 @@ class AppStatusDetector(private val context: Context) {
                     title = "Battery Optimization Whitelist",
                     componentName = "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
                     reason = "App has bypassed Android Doze mode and App Standby, allowing unlimited background execution",
+                    riskLevel = WakeUpRiskLevel.SAFE,
+                    riskExplanation = "Safe to cut: subjects app to standard Android battery saver and Doze limits",
+                    isPrimaryCulprit = true,
                     wakeupCount = totalWakeupCount,
                     isCut = isAppCut || cutPathIds.contains(id)
                 )
             )
         }
+
+        // Sort paths: Primary Culprits & Active Vectors first, then by Risk Level (Safe -> Moderate -> Risky)
+        list.sortWith(
+            compareByDescending<WakeUpPath> { it.isActiveVector }
+                .thenByDescending { it.isPrimaryCulprit }
+                .thenBy { it.riskLevel.ordinal }
+        )
 
         return list
     }
