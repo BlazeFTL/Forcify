@@ -1,0 +1,6 @@
+{
+  "name": "PureStop",
+  "description": "Modern app hibernation and force stop manager with Root and Non-Root modes, background restriction detection, and wake-up tracking control.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

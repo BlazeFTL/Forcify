@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">PureStop</string>
+    <string name="accessibility_service_description">PureStop uses Accessibility Service strictly in Non-Root mode to automate clicking the \'Force Stop\' and \'OK\' confirmation buttons in App Info settings, enabling one-tap app hibernation without root access.</string>
+</resources>
