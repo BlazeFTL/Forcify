@@ -5,7 +5,7 @@ import android.graphics.drawable.Drawable
 enum class AppState(val label: String, val description: String) {
     FOREGROUND("Foreground", "Actively in use on screen or visible"),
     WORKING_STATE("Working State", "Active background services or worker execution"),
-    EVADING_RESTRICTIONS("Evading Restrictions", "Running in background ignoring battery / power limits"),
+    EVADING_RESTRICTIONS("Evading Restrictions", "Running as foreground (evading restrictions)"),
     CACHED("Cached in RAM", "Dormant process waiting in memory"),
     BACKGROUND_FREE("Background Free", "Hibernated cleanly; zero active processes")
 }
@@ -32,6 +32,8 @@ data class InstalledAppItem(
     val appName: String,
     val icon: Drawable? = null,
     val state: AppState = AppState.BACKGROUND_FREE,
+    val stateDetail: String = "",
+    val secondaryDetail: String = "",
     val processImportance: Int = 1000,
     val pid: Int? = null,
     val wakeUpDetails: WakeUpDetails = WakeUpDetails(),

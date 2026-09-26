@@ -20,13 +20,16 @@ import com.example.model.BatchFreezeProgress
 import com.example.model.InstalledAppItem
 import com.example.service.ForceStopAccessibilityService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -76,7 +79,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
     private val _hideSystemAppsInAddList = MutableStateFlow(preferences.hideSystemAppsInAddList)
     val hideSystemAppsInAddList: StateFlow<Boolean> = _hideSystemAppsInAddList.asStateFlow()
 
-    // Dashboard State: Default to PENDING so already stopped apps don't clutter the home screen!
+    // Dashboard State: Default to PENDING so stopped apps don't clutter the main list
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
@@ -136,6 +139,21 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    // Separate live pending apps and hibernated apps for clean Greenify-style grouping
+    val pendingApps: StateFlow<List<InstalledAppItem>> = allManagedApps.map { list ->
+        list.filter {
+            it.state == AppState.FOREGROUND ||
+            it.state == AppState.WORKING_STATE ||
+            it.state == AppState.EVADING_RESTRICTIONS
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val hibernatedApps: StateFlow<List<InstalledAppItem>> = allManagedApps.map { list ->
+        list.filter {
+            it.state == AppState.BACKGROUND_FREE || it.state == AppState.CACHED
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val batchProgress: StateFlow<BatchFreezeProgress> = engine.batchProgress
 
     // Dialogs & Sheets
@@ -148,15 +166,33 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
     private val _statusMessage = MutableStateFlow<String?>(null)
     val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
 
+    private var liveMonitoringJob: Job? = null
+
     init {
         checkPermissions()
         refreshApps()
+        startLiveMonitoring()
 
         viewModelScope.launch {
             ForceStopAccessibilityService.stoppedPackageFlow.collect {
                 refreshApps(silent = true)
             }
         }
+    }
+
+    fun startLiveMonitoring() {
+        if (liveMonitoringJob?.isActive == true) return
+        liveMonitoringJob = viewModelScope.launch(Dispatchers.Default) {
+            while (isActive) {
+                delay(2500)
+                refreshApps(silent = true)
+            }
+        }
+    }
+
+    fun stopLiveMonitoring() {
+        liveMonitoringJob?.cancel()
+        liveMonitoringJob = null
     }
 
     fun setHideSystemAppsInAddList(hide: Boolean) {
@@ -321,16 +357,11 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             val success = engine.stopSingleApp(app)
             _statusMessage.value = if (success) "Force stopped ${app.appName}" else "Failed to force stop ${app.appName}"
-            // Small pause for Android process killer to clean up process table
             delay(250)
             refreshApps(silent = true)
         }
     }
 
-    /**
-     * Triggered by the Bottom-Right Floating Action Button!
-     * Force stops all running apps in the managed list.
-     */
     fun forceStopAllRunning() {
         viewModelScope.launch {
             val runningManaged = allManagedApps.value.filter {

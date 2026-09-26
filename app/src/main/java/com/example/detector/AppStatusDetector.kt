@@ -51,6 +51,34 @@ class AppStatusDetector(private val context: Context) {
         return mode == AppOpsManager.MODE_ALLOWED
     }
 
+    fun isSystemApp(pkgInfo: PackageInfo): Boolean {
+        val appInfo = pkgInfo.applicationInfo ?: return false
+        val pkg = pkgInfo.packageName
+
+        // Check system flags
+        val isSystemFlag = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+        val isUpdatedSystemFlag = (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+
+        // Check system directories
+        val sourceDir = appInfo.sourceDir ?: ""
+        val isSystemDir = sourceDir.startsWith("/system") ||
+            sourceDir.startsWith("/product") ||
+            sourceDir.startsWith("/apex") ||
+            sourceDir.startsWith("/vendor") ||
+            sourceDir.startsWith("/system_ext")
+
+        // Check package prefixes
+        val isSystemPrefix = pkg.startsWith("android") ||
+            pkg.startsWith("com.android.") ||
+            pkg.startsWith("com.google.android.webview") ||
+            pkg.startsWith("com.google.android.ext.") ||
+            pkg.startsWith("com.google.android.overlay.") ||
+            pkg.startsWith("com.google.android.packageinstaller") ||
+            pkg == "com.android.settings"
+
+        return isSystemFlag || isUpdatedSystemFlag || isSystemDir || isSystemPrefix
+    }
+
     suspend fun getRunningProcessesMap(): Map<String, ActivityManager.RunningAppProcessInfo> =
         withContext(Dispatchers.Default) {
             val map = mutableMapOf<String, ActivityManager.RunningAppProcessInfo>()
@@ -65,7 +93,7 @@ class AppStatusDetector(private val context: Context) {
                     }
                 }
             } catch (e: Exception) {
-                // Ignore security or permission exceptions
+                // Ignore
             }
             map
         }
@@ -133,7 +161,7 @@ class AppStatusDetector(private val context: Context) {
         } catch (e: Exception) {
             pkg
         }
-        val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+        val isSystem = isSystemApp(pkgInfo)
 
         val isIgnoredBattery = try {
             powerManager.isIgnoringBatteryOptimizations(pkg)
@@ -143,7 +171,8 @@ class AppStatusDetector(private val context: Context) {
 
         val hasWakeLockPerm = pkgInfo.requestedPermissions?.contains("android.permission.WAKE_LOCK") == true
         val triggers = detectWakeUpTriggers(pkgInfo, cutPackages.contains(pkg))
-        val wakeupCount = twentyFourHourWakeups[pkg] ?: triggers.size * 3
+        // Only use real launches from Android OS usage stats; do NOT invent or multiply numbers!
+        val wakeupCount = twentyFourHourWakeups[pkg] ?: 0
 
         val wakeUpDetails = WakeUpDetails(
             wakeupCount24h = wakeupCount,
@@ -159,7 +188,7 @@ class AppStatusDetector(private val context: Context) {
         val nonRootActivity = nonRootActivityMap[pkg]
         val runningProc = runningMap[pkg]
 
-        val state = if (isRootMode && rootProcessMap.isNotEmpty()) {
+        val (state, stateDetail, secondaryDetail) = if (isRootMode && rootProcessMap.isNotEmpty()) {
             determineRootState(rootState, isIgnoredBattery, hasWakeLockPerm, wakeUpDetails)
         } else {
             determineNonRootState(runningProc, nonRootActivity, isIgnoredBattery, hasWakeLockPerm, wakeUpDetails)
@@ -176,6 +205,8 @@ class AppStatusDetector(private val context: Context) {
             appName = appName,
             icon = icon,
             state = state,
+            stateDetail = stateDetail,
+            secondaryDetail = secondaryDetail,
             processImportance = runningProc?.importance ?: 1000,
             pid = rootState?.pid ?: runningProc?.pid,
             wakeUpDetails = wakeUpDetails,
@@ -189,26 +220,26 @@ class AppStatusDetector(private val context: Context) {
         isIgnoredBattery: Boolean,
         hasWakeLockPerm: Boolean,
         wakeUpDetails: WakeUpDetails
-    ): AppState {
+    ): Triple<AppState, String, String> {
         if (rootState == null || !rootState.isRunning) {
-            return AppState.BACKGROUND_FREE
+            return Triple(AppState.BACKGROUND_FREE, "Hibernated", "")
         }
 
         if (rootState.isTop) {
-            return AppState.FOREGROUND
+            return Triple(AppState.FOREGROUND, "Foreground", "Ignored running state")
         }
 
         // Active foreground service (like IDM+ download, VPN, etc.)
         if (rootState.isForegroundService) {
-            return AppState.EVADING_RESTRICTIONS
+            return Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
         }
 
         // Background running process
         if (isIgnoredBattery || (hasWakeLockPerm && !wakeUpDetails.isCut) || wakeUpDetails.wakeupCount24h > 15) {
-            return AppState.EVADING_RESTRICTIONS
+            return Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
         }
 
-        return AppState.WORKING_STATE
+        return Triple(AppState.WORKING_STATE, "Background service active", "")
     }
 
     private fun determineNonRootState(
@@ -217,17 +248,17 @@ class AppStatusDetector(private val context: Context) {
         isIgnoredBattery: Boolean,
         hasWakeLockPerm: Boolean,
         wakeUpDetails: WakeUpDetails
-    ): AppState {
+    ): Triple<AppState, String, String> {
         // Check Foreground Service
         if (nonRootActivity?.hasActiveForegroundService == true) {
-            return AppState.EVADING_RESTRICTIONS
+            return Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
         }
 
         val now = System.currentTimeMillis()
         if (nonRootActivity != null) {
             val elapsed = now - nonRootActivity.lastEventTimestamp
             if (nonRootActivity.lastEventType == UsageEvents.Event.ACTIVITY_RESUMED && elapsed < 90_000) {
-                return AppState.FOREGROUND
+                return Triple(AppState.FOREGROUND, "Foreground", "Ignored running state")
             }
         }
 
@@ -235,33 +266,39 @@ class AppStatusDetector(private val context: Context) {
             val importance = proc.importance
             return when {
                 importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND -> {
-                    AppState.FOREGROUND
+                    Triple(AppState.FOREGROUND, "Foreground", "Ignored running state")
                 }
                 importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE ||
                 importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_SERVICE ||
                 importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE ||
                 importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_PERCEPTIBLE -> {
                     if (isIgnoredBattery || (hasWakeLockPerm && !wakeUpDetails.isCut)) {
-                        AppState.EVADING_RESTRICTIONS
+                        Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
                     } else {
-                        AppState.WORKING_STATE
+                        Triple(AppState.WORKING_STATE, "Background service active", "")
                     }
                 }
                 importance >= ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED -> {
-                    AppState.CACHED
+                    Triple(AppState.CACHED, "Cached in RAM", "")
                 }
                 else -> {
-                    if (isIgnoredBattery || hasWakeLockPerm) AppState.EVADING_RESTRICTIONS else AppState.WORKING_STATE
+                    if (isIgnoredBattery || hasWakeLockPerm)
+                        Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
+                    else
+                        Triple(AppState.WORKING_STATE, "Background service active", "")
                 }
             }
         }
 
         // If had recent activity in last 3 minutes
         if (nonRootActivity != null && (now - nonRootActivity.lastEventTimestamp < 180_000)) {
-            return if (isIgnoredBattery || hasWakeLockPerm) AppState.EVADING_RESTRICTIONS else AppState.WORKING_STATE
+            return if (isIgnoredBattery || hasWakeLockPerm)
+                Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
+            else
+                Triple(AppState.WORKING_STATE, "Background service active", "")
         }
 
-        return AppState.BACKGROUND_FREE
+        return Triple(AppState.BACKGROUND_FREE, "Hibernated", "")
     }
 
     private fun detectWakeUpTriggers(pkgInfo: PackageInfo, isCut: Boolean): List<WakeUpTrigger> {
@@ -352,7 +389,7 @@ class AppStatusDetector(private val context: Context) {
                 }
             }
         } catch (e: Exception) {
-            // Ignore usage events exceptions
+            // Ignore
         }
         map
     }
@@ -360,6 +397,7 @@ class AppStatusDetector(private val context: Context) {
     private fun fallbackAppItem(pkg: String) = InstalledAppItem(
         packageName = pkg,
         appName = pkg,
-        state = AppState.BACKGROUND_FREE
+        state = AppState.BACKGROUND_FREE,
+        stateDetail = "Hibernated"
     )
 }

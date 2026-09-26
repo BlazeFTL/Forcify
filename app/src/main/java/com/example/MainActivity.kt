@@ -43,8 +43,11 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.checkPermissions()
-        if (viewModel.isSetupCompleted.value) {
-            viewModel.refreshApps(silent = true)
-        }
+        viewModel.startLiveMonitoring()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        viewModel.stopLiveMonitoring()
     }
 }
