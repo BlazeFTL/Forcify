@@ -20,6 +20,7 @@ import com.example.model.BatchFreezeProgress
 import com.example.model.InstalledAppItem
 import com.example.service.ForceStopAccessibilityService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -30,10 +31,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 enum class DashboardFilter {
-    ALL,
-    RUNNING,
-    EVADING,
-    HIBERNATED
+    PENDING,    // Running or evading apps waiting to be stopped (Default)
+    ALL,        // All managed apps in list
+    EVADING,    // Apps actively evading restrictions
+    HIBERNATED  // Already stopped / Background Free apps
 }
 
 enum class RootCheckStatus {
@@ -71,14 +72,18 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
     private val _rootStatus = MutableStateFlow(RootCheckStatus.IDLE)
     val rootStatus: StateFlow<RootCheckStatus> = _rootStatus.asStateFlow()
 
-    // Dashboard State
+    // Add List System Apps Filter
+    private val _hideSystemAppsInAddList = MutableStateFlow(preferences.hideSystemAppsInAddList)
+    val hideSystemAppsInAddList: StateFlow<Boolean> = _hideSystemAppsInAddList.asStateFlow()
+
+    // Dashboard State: Default to PENDING so already stopped apps don't clutter the home screen!
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
-    private val _currentFilter = MutableStateFlow(DashboardFilter.ALL)
+    private val _currentFilter = MutableStateFlow(DashboardFilter.PENDING)
     val currentFilter: StateFlow<DashboardFilter> = _currentFilter.asStateFlow()
 
     private val _allInstalledApps = MutableStateFlow<List<InstalledAppItem>>(emptyList())
@@ -87,14 +92,13 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
     private val _managedAppEntities = database.appDao().getAllManagedApps()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val managedApps: StateFlow<List<InstalledAppItem>> = combine(
+    // All managed apps joined with live status
+    val allManagedApps: StateFlow<List<InstalledAppItem>> = combine(
         _managedAppEntities,
-        _allInstalledApps,
-        _searchQuery,
-        _currentFilter
-    ) { entities, installed, query, filter ->
+        _allInstalledApps
+    ) { entities, installed ->
         val entityMap = entities.associateBy { it.packageName }
-        val list = installed.filter { entityMap.containsKey(it.packageName) }.map { item ->
+        installed.filter { entityMap.containsKey(it.packageName) }.map { item ->
             val entity = entityMap[item.packageName]
             item.copy(
                 isManaged = true,
@@ -103,7 +107,14 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                 wakeUpDetails = item.wakeUpDetails.copy(isCut = entity?.cutWakeups == true)
             )
         }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    // Filtered managed apps for display on Home Page
+    val managedApps: StateFlow<List<InstalledAppItem>> = combine(
+        allManagedApps,
+        _searchQuery,
+        _currentFilter
+    ) { list, query, filter ->
         val filteredByQuery = if (query.isBlank()) list else {
             list.filter {
                 it.appName.contains(query, ignoreCase = true) ||
@@ -112,12 +123,16 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
         }
 
         when (filter) {
-            DashboardFilter.ALL -> filteredByQuery
-            DashboardFilter.RUNNING -> filteredByQuery.filter {
-                it.state == AppState.FOREGROUND || it.state == AppState.WORKING_STATE || it.state == AppState.EVADING_RESTRICTIONS
+            DashboardFilter.PENDING -> filteredByQuery.filter {
+                it.state == AppState.FOREGROUND ||
+                it.state == AppState.WORKING_STATE ||
+                it.state == AppState.EVADING_RESTRICTIONS
             }
+            DashboardFilter.ALL -> filteredByQuery
             DashboardFilter.EVADING -> filteredByQuery.filter { it.state == AppState.EVADING_RESTRICTIONS }
-            DashboardFilter.HIBERNATED -> filteredByQuery.filter { it.state == AppState.BACKGROUND_FREE || it.state == AppState.CACHED }
+            DashboardFilter.HIBERNATED -> filteredByQuery.filter {
+                it.state == AppState.BACKGROUND_FREE || it.state == AppState.CACHED
+            }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -144,6 +159,11 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun setHideSystemAppsInAddList(hide: Boolean) {
+        preferences.hideSystemAppsInAddList = hide
+        _hideSystemAppsInAddList.value = hide
+    }
+
     fun checkPermissions() {
         _hasUsageAccess.value = detector.hasUsageStatsPermission()
         _isAccessibilityEnabled.value = ForceStopAccessibilityService.isRunning()
@@ -166,6 +186,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
     fun selectOperatingMode(mode: OperatingMode) {
         preferences.mode = mode
         _operatingMode.value = mode
+        refreshApps()
     }
 
     fun completeSetup() {
@@ -214,8 +235,16 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                         PackageManager.GET_PERMISSIONS or PackageManager.GET_RECEIVERS
                     )
 
+                    val isRoot = preferences.mode == OperatingMode.ROOT
+                    // 1. Root processes & foreground service inspection
+                    val rootProcessMap = if (isRoot) RootExecutor.queryRootProcessStates() else emptyMap()
+
+                    // 2. Non-root active foreground services & recent activities
+                    val nonRootActivityMap = detector.getNonRootActivityMap()
+
+                    // 3. System running processes map
                     val runningMap = detector.getRunningProcessesMap()
-                    val entities = database.appDao().getAllManagedApps()
+
                     val cutPackages = mutableSetOf<String>()
                     val managedPackages = mutableSetOf<String>()
                     val dbEntities = _managedAppEntities.value
@@ -233,6 +262,9 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                         val item = detector.detectAppItem(
                             pkgInfo = pkgInfo,
                             runningMap = runningMap,
+                            rootProcessMap = rootProcessMap,
+                            nonRootActivityMap = nonRootActivityMap,
+                            isRootMode = isRoot,
                             managedPackages = managedPackages,
                             cutPackages = cutPackages,
                             twentyFourHourWakeups = twentyFourHourWakeups
@@ -240,10 +272,12 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                         resultList.add(item)
                     }
 
-                    // Sort: Running/Evading first, then alphabetical
+                    // Sort: Evading / Working first, then alphabetical
                     resultList.sortWith(
                         compareByDescending<InstalledAppItem> {
-                            it.state == AppState.EVADING_RESTRICTIONS || it.state == AppState.WORKING_STATE || it.state == AppState.FOREGROUND
+                            it.state == AppState.EVADING_RESTRICTIONS ||
+                            it.state == AppState.WORKING_STATE ||
+                            it.state == AppState.FOREGROUND
                         }.thenBy { it.appName.lowercase() }
                     )
 
@@ -287,6 +321,8 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             val success = engine.stopSingleApp(app)
             _statusMessage.value = if (success) "Force stopped ${app.appName}" else "Failed to force stop ${app.appName}"
+            // Small pause for Android process killer to clean up process table
+            delay(250)
             refreshApps(silent = true)
         }
     }
@@ -297,7 +333,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
      */
     fun forceStopAllRunning() {
         viewModelScope.launch {
-            val runningManaged = managedApps.value.filter {
+            val runningManaged = allManagedApps.value.filter {
                 it.state == AppState.FOREGROUND ||
                 it.state == AppState.WORKING_STATE ||
                 it.state == AppState.EVADING_RESTRICTIONS ||
@@ -310,7 +346,10 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
             }
 
             engine.stopBatchApps(runningManaged) {
-                refreshApps(silent = true)
+                viewModelScope.launch {
+                    delay(300)
+                    refreshApps(silent = true)
+                }
             }
         }
     }
@@ -333,7 +372,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
 
     fun cutAllActiveWakeups() {
         viewModelScope.launch {
-            val candidates = managedApps.value.filter {
+            val candidates = allManagedApps.value.filter {
                 !it.wakeUpDetails.isCut &&
                 (it.state == AppState.EVADING_RESTRICTIONS || it.wakeUpDetails.wakeupCount24h > 5)
             }
@@ -373,7 +412,6 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
             }
             context.startActivity(intent)
         } catch (e: Exception) {
-            // Fallback
             try {
                 val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

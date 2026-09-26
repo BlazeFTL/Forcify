@@ -42,6 +42,10 @@ class PureStopPreferences(context: Context) {
         get() = prefs.getBoolean("show_system_apps", false)
         set(value) = prefs.edit().putBoolean("show_system_apps", value).apply()
 
+    var hideSystemAppsInAddList: Boolean
+        get() = prefs.getBoolean("hide_system_apps_add_list", true)
+        set(value) = prefs.edit().putBoolean("hide_system_apps_add_list", value).apply()
+
     fun resetSetup() {
         prefs.edit()
             .putBoolean("is_setup_completed", false)

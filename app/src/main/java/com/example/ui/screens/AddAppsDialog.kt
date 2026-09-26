@@ -22,9 +22,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -32,7 +30,6 @@ import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -40,6 +37,8 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -50,7 +49,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -62,8 +60,7 @@ import com.example.ui.components.AppStatusBadge
 private enum class AddAppFilter {
     ALL,
     RUNNING,
-    EVADING,
-    USER_ONLY
+    EVADING
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -71,6 +68,8 @@ private enum class AddAppFilter {
 fun AddAppsDialog(
     allApps: List<InstalledAppItem>,
     managedPackageNames: Set<String>,
+    hideSystemApps: Boolean,
+    onToggleHideSystemApps: (Boolean) -> Unit,
     isLoading: Boolean,
     onDismiss: () -> Unit,
     onConfirmAdd: (List<InstalledAppItem>) -> Unit
@@ -80,9 +79,12 @@ fun AddAppsDialog(
     var currentFilter by remember { mutableStateOf(AddAppFilter.ALL) }
     val selectedPackages = remember { mutableStateOf(mutableSetOf<String>()) }
 
-    // Filter candidate apps (exclude already managed apps)
-    val candidateApps = remember(allApps, managedPackageNames, searchQuery, currentFilter) {
+    // Filter candidate apps (exclude already managed apps and apply system filter)
+    val candidateApps = remember(allApps, managedPackageNames, searchQuery, currentFilter, hideSystemApps) {
         allApps.filter { !managedPackageNames.contains(it.packageName) }.filter { item ->
+            // System app filter
+            if (hideSystemApps && item.isSystemApp) return@filter false
+
             val matchesQuery = searchQuery.isBlank() ||
                 item.appName.contains(searchQuery, ignoreCase = true) ||
                 item.packageName.contains(searchQuery, ignoreCase = true)
@@ -93,7 +95,6 @@ fun AddAppsDialog(
                     item.state == AppState.WORKING_STATE ||
                     item.state == AppState.EVADING_RESTRICTIONS
                 AddAppFilter.EVADING -> item.state == AppState.EVADING_RESTRICTIONS
-                AddAppFilter.USER_ONLY -> !item.isSystemApp
             }
 
             matchesQuery && matchesFilter
@@ -115,7 +116,7 @@ fun AddAppsDialog(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                    .padding(horizontal = 20.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -143,7 +144,7 @@ fun AddAppsDialog(
                 onValueChange = { searchQuery = it },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 6.dp),
+                    .padding(horizontal = 20.dp, vertical = 4.dp),
                 placeholder = { Text("Search installed applications...") },
                 leadingIcon = {
                     Icon(imageVector = Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -158,11 +159,40 @@ fun AddAppsDialog(
                 )
             )
 
+            // Hide System Apps Toggle Row (Requested by User)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Hide System Apps",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (hideSystemApps) "(User Apps Only)" else "(Showing All)",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = hideSystemApps,
+                    onCheckedChange = onToggleHideSystemApps,
+                    colors = SwitchDefaults.colors(checkedThumbColor = MaterialTheme.colorScheme.primary)
+                )
+            }
+
             // Filter Chips & Quick Select Row
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 6.dp),
+                    .padding(horizontal = 20.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -213,7 +243,7 @@ fun AddAppsDialog(
             } else {
                 LazyColumn(
                     modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 6.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(candidateApps, key = { it.packageName }) { app ->
@@ -243,13 +273,27 @@ fun AddAppsDialog(
                             AppIconImage(drawable = app.icon, appName = app.appName, size = 42.dp)
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = app.appName,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1
-                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = app.appName,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
+                                    if (app.isSystemApp) {
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                                        ) {
+                                            Text(text = "System", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                    }
+                                }
                                 Text(
                                     text = app.packageName,
                                     fontSize = 11.sp,
@@ -262,7 +306,7 @@ fun AddAppsDialog(
                                     if (app.wakeUpDetails.wakeupCount24h > 0) {
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text(
-                                            text = "${app.wakeUpDetails.wakeupCount24h} wakeups",
+                                            text = "${app.wakeUpDetails.wakeupCount24h} launches",
                                             fontSize = 10.sp,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )

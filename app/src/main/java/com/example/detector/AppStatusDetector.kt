@@ -5,19 +5,26 @@ import android.app.AppOpsManager
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
-import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.PowerManager
 import android.os.Process
+import com.example.engine.RootExecutor
+import com.example.engine.RootProcessState
 import com.example.model.AppState
 import com.example.model.InstalledAppItem
 import com.example.model.WakeUpDetails
 import com.example.model.WakeUpTrigger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+data class NonRootProcessActivity(
+    val lastEventType: Int = 0,
+    val lastEventTimestamp: Long = 0L,
+    val hasActiveForegroundService: Boolean = false
+)
 
 class AppStatusDetector(private val context: Context) {
     private val packageManager: PackageManager = context.packageManager
@@ -51,7 +58,6 @@ class AppStatusDetector(private val context: Context) {
                 val runningList = activityManager.runningAppProcesses ?: emptyList()
                 for (proc in runningList) {
                     for (pkg in proc.pkgList ?: emptyArray()) {
-                        // Store lowest importance (highest priority/activity)
                         val existing = map[pkg]
                         if (existing == null || proc.importance < existing.importance) {
                             map[pkg] = proc
@@ -64,9 +70,58 @@ class AppStatusDetector(private val context: Context) {
             map
         }
 
+    suspend fun getNonRootActivityMap(): Map<String, NonRootProcessActivity> = withContext(Dispatchers.Default) {
+        val map = mutableMapOf<String, NonRootProcessActivity>()
+        if (usageStatsManager == null || !hasUsageStatsPermission()) return@withContext map
+
+        try {
+            val endTime = System.currentTimeMillis()
+            val startTime = endTime - (60 * 60 * 1000L) // Scan last 1 hour
+            val events = usageStatsManager.queryEvents(startTime, endTime)
+            val event = UsageEvents.Event()
+
+            val fgServiceStarts = mutableMapOf<String, Long>()
+            val fgServiceStops = mutableMapOf<String, Long>()
+            val lastEvents = mutableMapOf<String, Pair<Int, Long>>()
+
+            while (events.hasNextEvent()) {
+                events.getNextEvent(event)
+                val pkg = event.packageName ?: continue
+                val type = event.eventType
+                val time = event.timeStamp
+
+                lastEvents[pkg] = Pair(type, time)
+
+                if (type == UsageEvents.Event.FOREGROUND_SERVICE_START) {
+                    fgServiceStarts[pkg] = time
+                } else if (type == UsageEvents.Event.FOREGROUND_SERVICE_STOP) {
+                    fgServiceStops[pkg] = time
+                }
+            }
+
+            for ((pkg, eventPair) in lastEvents) {
+                val start = fgServiceStarts[pkg] ?: 0L
+                val stop = fgServiceStops[pkg] ?: 0L
+                val hasFgService = start > stop && (System.currentTimeMillis() - start < 12 * 60 * 60 * 1000L)
+
+                map[pkg] = NonRootProcessActivity(
+                    lastEventType = eventPair.first,
+                    lastEventTimestamp = eventPair.second,
+                    hasActiveForegroundService = hasFgService
+                )
+            }
+        } catch (e: Exception) {
+            // Ignore
+        }
+        map
+    }
+
     suspend fun detectAppItem(
         pkgInfo: PackageInfo,
         runningMap: Map<String, ActivityManager.RunningAppProcessInfo>,
+        rootProcessMap: Map<String, RootProcessState>,
+        nonRootActivityMap: Map<String, NonRootProcessActivity>,
+        isRootMode: Boolean,
         managedPackages: Set<String>,
         cutPackages: Set<String>,
         twentyFourHourWakeups: Map<String, Int>
@@ -80,7 +135,6 @@ class AppStatusDetector(private val context: Context) {
         }
         val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
 
-        val runningProc = runningMap[pkg]
         val isIgnoredBattery = try {
             powerManager.isIgnoringBatteryOptimizations(pkg)
         } catch (e: Exception) {
@@ -101,7 +155,15 @@ class AppStatusDetector(private val context: Context) {
             triggers = triggers
         )
 
-        val state = determineAppState(runningProc, isIgnoredBattery, hasWakeLockPerm, wakeUpDetails)
+        val rootState = rootProcessMap[pkg]
+        val nonRootActivity = nonRootActivityMap[pkg]
+        val runningProc = runningMap[pkg]
+
+        val state = if (isRootMode && rootProcessMap.isNotEmpty()) {
+            determineRootState(rootState, isIgnoredBattery, hasWakeLockPerm, wakeUpDetails)
+        } else {
+            determineNonRootState(runningProc, nonRootActivity, isIgnoredBattery, hasWakeLockPerm, wakeUpDetails)
+        }
 
         val icon = try {
             packageManager.getApplicationIcon(appInfo)
@@ -115,51 +177,91 @@ class AppStatusDetector(private val context: Context) {
             icon = icon,
             state = state,
             processImportance = runningProc?.importance ?: 1000,
-            pid = runningProc?.pid,
+            pid = rootState?.pid ?: runningProc?.pid,
             wakeUpDetails = wakeUpDetails,
             isSystemApp = isSystem,
             isManaged = managedPackages.contains(pkg)
         )
     }
 
-    private fun determineAppState(
-        proc: ActivityManager.RunningAppProcessInfo?,
+    private fun determineRootState(
+        rootState: RootProcessState?,
         isIgnoredBattery: Boolean,
         hasWakeLockPerm: Boolean,
         wakeUpDetails: WakeUpDetails
     ): AppState {
-        if (proc == null) {
+        if (rootState == null || !rootState.isRunning) {
             return AppState.BACKGROUND_FREE
         }
 
-        val importance = proc.importance
-        return when {
-            importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND -> {
-                AppState.FOREGROUND
+        if (rootState.isTop) {
+            return AppState.FOREGROUND
+        }
+
+        // Active foreground service (like IDM+ download, VPN, etc.)
+        if (rootState.isForegroundService) {
+            return AppState.EVADING_RESTRICTIONS
+        }
+
+        // Background running process
+        if (isIgnoredBattery || (hasWakeLockPerm && !wakeUpDetails.isCut) || wakeUpDetails.wakeupCount24h > 15) {
+            return AppState.EVADING_RESTRICTIONS
+        }
+
+        return AppState.WORKING_STATE
+    }
+
+    private fun determineNonRootState(
+        proc: ActivityManager.RunningAppProcessInfo?,
+        nonRootActivity: NonRootProcessActivity?,
+        isIgnoredBattery: Boolean,
+        hasWakeLockPerm: Boolean,
+        wakeUpDetails: WakeUpDetails
+    ): AppState {
+        // Check Foreground Service
+        if (nonRootActivity?.hasActiveForegroundService == true) {
+            return AppState.EVADING_RESTRICTIONS
+        }
+
+        val now = System.currentTimeMillis()
+        if (nonRootActivity != null) {
+            val elapsed = now - nonRootActivity.lastEventTimestamp
+            if (nonRootActivity.lastEventType == UsageEvents.Event.ACTIVITY_RESUMED && elapsed < 90_000) {
+                return AppState.FOREGROUND
             }
-            importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE ||
-            importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_SERVICE ||
-            importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE ||
-            importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_PERCEPTIBLE -> {
-                // If it's running background service while evading battery restrictions or holding wakelocks without user in foreground
-                if (isIgnoredBattery || (hasWakeLockPerm && !wakeUpDetails.isCut) || wakeUpDetails.wakeupCount24h > 15) {
-                    AppState.EVADING_RESTRICTIONS
-                } else {
-                    AppState.WORKING_STATE
+        }
+
+        if (proc != null) {
+            val importance = proc.importance
+            return when {
+                importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND -> {
+                    AppState.FOREGROUND
                 }
-            }
-            importance >= ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED -> {
-                AppState.CACHED
-            }
-            else -> {
-                // Standard background process
-                if (isIgnoredBattery || hasWakeLockPerm) {
-                    AppState.EVADING_RESTRICTIONS
-                } else {
-                    AppState.WORKING_STATE
+                importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE ||
+                importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_SERVICE ||
+                importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE ||
+                importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_PERCEPTIBLE -> {
+                    if (isIgnoredBattery || (hasWakeLockPerm && !wakeUpDetails.isCut)) {
+                        AppState.EVADING_RESTRICTIONS
+                    } else {
+                        AppState.WORKING_STATE
+                    }
+                }
+                importance >= ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED -> {
+                    AppState.CACHED
+                }
+                else -> {
+                    if (isIgnoredBattery || hasWakeLockPerm) AppState.EVADING_RESTRICTIONS else AppState.WORKING_STATE
                 }
             }
         }
+
+        // If had recent activity in last 3 minutes
+        if (nonRootActivity != null && (now - nonRootActivity.lastEventTimestamp < 180_000)) {
+            return if (isIgnoredBattery || hasWakeLockPerm) AppState.EVADING_RESTRICTIONS else AppState.WORKING_STATE
+        }
+
+        return AppState.BACKGROUND_FREE
     }
 
     private fun detectWakeUpTriggers(pkgInfo: PackageInfo, isCut: Boolean): List<WakeUpTrigger> {
@@ -168,7 +270,6 @@ class AppStatusDetector(private val context: Context) {
 
         for (receiver in receivers) {
             val name = receiver.name.substringAfterLast('.')
-            // Check known triggers
             if (name.contains("Boot", ignoreCase = true) || name.contains("Startup", ignoreCase = true)) {
                 list.add(
                     WakeUpTrigger(
@@ -201,7 +302,6 @@ class AppStatusDetector(private val context: Context) {
             }
         }
 
-        // Add default triggers if app requests wake permissions
         if (pkgInfo.requestedPermissions?.contains("android.permission.RECEIVE_BOOT_COMPLETED") == true &&
             list.none { it.name.contains("Boot") }
         ) {
