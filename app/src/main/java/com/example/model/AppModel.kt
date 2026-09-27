@@ -4,7 +4,8 @@ import android.graphics.drawable.Drawable
 
 enum class AppState(val label: String, val description: String) {
     FOREGROUND("Foreground", "Actively in use on screen or visible"),
-    WORKING_STATE("Working State", "Active background services or worker execution"),
+    WORKING_STATE("Working State", "In recent tasks or carrying out active task"),
+    BACKGROUND_RUNNING("Running", "Process running in background"),
     EVADING_RESTRICTIONS("Evading Restrictions", "Running as foreground (evading restrictions)"),
     CACHED("Cached in RAM", "Dormant process waiting in memory"),
     BACKGROUND_FREE("Background Free", "Hibernated cleanly; zero active processes")

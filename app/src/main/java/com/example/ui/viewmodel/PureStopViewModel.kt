@@ -115,46 +115,44 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
     private val _managedAppsFlow = MutableStateFlow<List<InstalledAppItem>>(emptyList())
     val allManagedApps: StateFlow<List<InstalledAppItem>> = _managedAppsFlow.asStateFlow()
 
-    // 1. Not Hibernating Automatically (Foreground, Evading Restrictions, Active Working State)
+    // In-memory set of package names stopped during the session to guarantee they stay hibernated
+    private val _manuallyStoppedPackages = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    // 1. Not Hibernating Automatically (Foreground, Background Running, Evading Restrictions, Active Working State)
     val notHibernatingApps: StateFlow<List<InstalledAppItem>> = allManagedApps.map { list ->
         list.filter {
-            it.state == AppState.FOREGROUND ||
-            it.state == AppState.EVADING_RESTRICTIONS ||
-            it.state == AppState.WORKING_STATE
+            !it.isStoppedState &&
+            it.state != AppState.BACKGROUND_FREE &&
+            (it.state == AppState.FOREGROUND ||
+             it.state == AppState.BACKGROUND_RUNNING ||
+             it.state == AppState.EVADING_RESTRICTIONS ||
+             it.state == AppState.WORKING_STATE)
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // 2. Will Hibernate Soon After Screen Goes Off (Cached in RAM, dormant background processes, or background-free apps pending hibernation)
+    // 2. Will Hibernate Soon After Screen Goes Off (Cached in RAM, or dormant unstopped processes)
     val willHibernateSoonApps: StateFlow<List<InstalledAppItem>> = allManagedApps.map { list ->
         list.filter {
+            !it.isStoppedState &&
+            it.state != AppState.BACKGROUND_FREE &&
             it.state != AppState.FOREGROUND &&
+            it.state != AppState.BACKGROUND_RUNNING &&
             it.state != AppState.EVADING_RESTRICTIONS &&
-            it.state != AppState.WORKING_STATE &&
-            (it.lastFrozenTimestamp == 0L || !it.isStoppedState || it.state == AppState.CACHED)
+            it.state != AppState.WORKING_STATE
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // All unhibernated apps that can be force stopped (Both Not Hibernating and Will Hibernate Soon)
     val pendingApps: StateFlow<List<InstalledAppItem>> = allManagedApps.map { list ->
         list.filter {
-            it.state == AppState.FOREGROUND ||
-            it.state == AppState.EVADING_RESTRICTIONS ||
-            it.state == AppState.WORKING_STATE ||
-            it.lastFrozenTimestamp == 0L ||
-            !it.isStoppedState ||
-            it.state == AppState.CACHED
+            !it.isStoppedState && it.state != AppState.BACKGROUND_FREE
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // 3. Cleanly Hibernated Apps
+    // 3. Cleanly Hibernated Apps (Already stopped in system or frozen by app)
     val hibernatedApps: StateFlow<List<InstalledAppItem>> = allManagedApps.map { list ->
         list.filter {
-            it.lastFrozenTimestamp > 0L &&
-            it.isStoppedState &&
-            it.state != AppState.FOREGROUND &&
-            it.state != AppState.EVADING_RESTRICTIONS &&
-            it.state != AppState.WORKING_STATE &&
-            it.state != AppState.CACHED
+            it.isStoppedState || it.state == AppState.BACKGROUND_FREE
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -196,6 +194,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
     fun startLiveMonitoring() {
         if (liveMonitoringJob?.isActive == true) return
         liveMonitoringJob = viewModelScope.launch(Dispatchers.Default) {
+            refreshManagedAppsOnly(silent = true)
             while (isActive) {
                 delay(3000)
                 refreshManagedAppsOnly(silent = true)
@@ -373,13 +372,13 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                                 val isFlagStopped = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_STOPPED) != 0
                                 val isRunning = runningProc != null
                                 val isStoppedState = isFlagStopped && !isRunning
-                                val isCleanlyHibernated = isStoppedState && entity.lastFrozenTimestamp > 0L
+                                val isCleanlyHibernated = isStoppedState
                                 val state = if (runningProc != null) {
                                     when (runningProc.importance) {
                                         android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND -> AppState.FOREGROUND
                                         android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE -> AppState.EVADING_RESTRICTIONS
                                         android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED -> AppState.CACHED
-                                        else -> AppState.WORKING_STATE
+                                        else -> AppState.BACKGROUND_RUNNING
                                     }
                                 } else {
                                     if (isCleanlyHibernated) AppState.BACKGROUND_FREE else AppState.CACHED
@@ -391,7 +390,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                                         appName = appName,
                                         icon = icon,
                                         state = state,
-                                        stateDetail = if (isCleanlyHibernated) "Hibernated" else if (state == AppState.CACHED) "Cached in RAM" else if (state == AppState.BACKGROUND_FREE) "Pending Hibernation" else state.label,
+                                        stateDetail = if (isCleanlyHibernated) "Hibernated" else if (state == AppState.CACHED) "Cached in RAM" else state.label,
                                         secondaryDetail = if (!isCleanlyHibernated && state != AppState.FOREGROUND && state != AppState.EVADING_RESTRICTIONS && state != AppState.WORKING_STATE) "Will hibernate after screen off" else "",
                                         isManaged = true,
                                         lastFrozenTimestamp = entity.lastFrozenTimestamp,
@@ -453,17 +452,17 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                                 twentyFourHourWakeups = twentyFourHourWakeups
                             )
                             val isWorkingIgnored = preferences.isWorkingStateIgnored(entity.packageName)
-                            val isCleanlyHibernated = item.isStoppedState && entity.lastFrozenTimestamp > 0L && item.state == AppState.BACKGROUND_FREE
-                            val finalItem = if (!isCleanlyHibernated && item.state == AppState.BACKGROUND_FREE) {
+                            val isCleanlyHibernated = item.isStoppedState || (item.state == AppState.BACKGROUND_FREE)
+                            val finalItem = if (isCleanlyHibernated) {
                                 item.copy(
-                                    state = AppState.CACHED,
-                                    stateDetail = "Pending Hibernation",
-                                    secondaryDetail = "Will hibernate after screen off",
+                                    state = AppState.BACKGROUND_FREE,
+                                    stateDetail = "Hibernated",
+                                    secondaryDetail = "",
                                     isManaged = true,
-                                    lastFrozenTimestamp = entity.lastFrozenTimestamp,
+                                    lastFrozenTimestamp = if (entity.lastFrozenTimestamp > 0L) entity.lastFrozenTimestamp else 0L,
                                     freezeCount = entity.freezeCount,
                                     ignoreWorkingState = isWorkingIgnored,
-                                    isStoppedState = false
+                                    isStoppedState = true
                                 )
                             } else {
                                 item.copy(
@@ -471,7 +470,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                                     lastFrozenTimestamp = entity.lastFrozenTimestamp,
                                     freezeCount = entity.freezeCount,
                                     ignoreWorkingState = isWorkingIgnored,
-                                    isStoppedState = isCleanlyHibernated
+                                    isStoppedState = false
                                 )
                             }
                             resultList.add(finalItem)

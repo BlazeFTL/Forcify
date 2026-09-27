@@ -12,7 +12,8 @@ data class RootProcessState(
     val isForegroundService: Boolean = false,
     val isTop: Boolean = false,
     val pid: Int? = null,
-    val activeComponents: Set<String> = emptySet()
+    val activeComponents: Set<String> = emptySet(),
+    val isInRecents: Boolean = false
 )
 
 object RootExecutor {
@@ -188,6 +189,24 @@ object RootExecutor {
                         if (pkg != null && (line.contains("adj=0") || line.contains("TOP") || line.contains("FOREGROUND"))) {
                             val prev = map[pkg] ?: RootProcessState(isRunning = true)
                             map[pkg] = prev.copy(isTop = true)
+                        }
+                    }
+                }
+            }
+
+            // 5. dumpsys activity recents (identify apps in user's Recent Tasks / Overview)
+            val recentsRes = executeCommand("dumpsys activity recents")
+            if (recentsRes.isSuccess) {
+                val output = recentsRes.getOrNull() ?: ""
+                for (line in output.lines()) {
+                    if (line.contains("realActivity=") || line.contains("affinity=") || line.contains("Recent #")) {
+                        val match = Regex("(?:realActivity=|affinity=)([a-zA-Z0-9._]+)/?").find(line)
+                        val pkg = match?.groupValues?.get(1)?.trim()
+                        if (!pkg.isNullOrEmpty() && !pkg.contains("launcher") && !pkg.contains("systemui") && !pkg.contains("forcify")) {
+                            val existing = map[pkg]
+                            if (existing != null && existing.isRunning) {
+                                map[pkg] = existing.copy(isInRecents = true)
+                            }
                         }
                     }
                 }

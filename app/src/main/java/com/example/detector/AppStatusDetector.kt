@@ -25,7 +25,8 @@ import kotlinx.coroutines.withContext
 data class NonRootProcessActivity(
     val lastEventType: Int = 0,
     val lastEventTimestamp: Long = 0L,
-    val hasActiveForegroundService: Boolean = false
+    val hasActiveForegroundService: Boolean = false,
+    val isInRecents: Boolean = false
 )
 
 class AppStatusDetector(private val context: Context) {
@@ -129,15 +130,20 @@ class AppStatusDetector(private val context: Context) {
                 }
             }
 
+            val now = System.currentTimeMillis()
             for ((pkg, eventPair) in lastEvents) {
                 val start = fgServiceStarts[pkg] ?: 0L
                 val stop = fgServiceStops[pkg] ?: 0L
-                val hasFgService = start > stop && (System.currentTimeMillis() - start < 12 * 60 * 60 * 1000L)
+                val hasFgService = start > stop && (now - start < 12 * 60 * 60 * 1000L)
+                val isRecent = (now - eventPair.second < 10 * 60 * 1000L) &&
+                    (eventPair.first == UsageEvents.Event.ACTIVITY_RESUMED ||
+                     eventPair.first == UsageEvents.Event.ACTIVITY_PAUSED)
 
                 map[pkg] = NonRootProcessActivity(
                     lastEventType = eventPair.first,
                     lastEventTimestamp = eventPair.second,
-                    hasActiveForegroundService = hasFgService
+                    hasActiveForegroundService = hasFgService,
+                    isInRecents = isRecent
                 )
             }
         } catch (e: Exception) {
@@ -203,9 +209,9 @@ class AppStatusDetector(private val context: Context) {
         val (isUnsafe, unsafeReason) = checkUnsafeToForceStop(pkgInfo, appName)
 
         val (state, stateDetail, secondaryDetail) = if (isRootMode && rootProcessMap.isNotEmpty()) {
-            determineRootState(rootState, isIgnoredBattery, hasWakeLockPerm, wakeUpDetails, isFlagStopped)
+            determineRootState(rootState, isIgnoredBattery, hasWakeLockPerm, wakeUpDetails, isFlagStopped, pkg)
         } else {
-            determineNonRootState(runningProc, nonRootActivity, isIgnoredBattery, hasWakeLockPerm, wakeUpDetails, isFlagStopped)
+            determineNonRootState(runningProc, nonRootActivity, isIgnoredBattery, hasWakeLockPerm, wakeUpDetails, isFlagStopped, pkg)
         }
 
         val icon = try {
@@ -357,12 +363,27 @@ class AppStatusDetector(private val context: Context) {
         return Pair(false, "")
     }
 
+    private fun isDownloaderOrMediaApp(packageName: String): Boolean {
+        val pkg = packageName.lowercase()
+        return pkg.contains("idm") ||
+            pkg.contains("download") ||
+            pkg.contains("adm") ||
+            pkg.contains("torrent") ||
+            pkg.contains("videoplayer") ||
+            pkg.contains("mxtech") ||
+            pkg.contains("vlc") ||
+            pkg.contains("spotify") ||
+            pkg.contains("music") ||
+            pkg.contains("podcast")
+    }
+
     private fun determineRootState(
         rootState: RootProcessState?,
         isIgnoredBattery: Boolean,
         hasWakeLockPerm: Boolean,
         wakeUpDetails: WakeUpDetails,
-        isFlagStopped: Boolean
+        isFlagStopped: Boolean,
+        packageName: String
     ): Triple<AppState, String, String> {
         if (rootState == null || !rootState.isRunning) {
             return if (isFlagStopped) {
@@ -373,20 +394,32 @@ class AppStatusDetector(private val context: Context) {
         }
 
         if (rootState.isTop) {
-            return Triple(AppState.FOREGROUND, "Foreground", "Ignored running state")
+            return Triple(AppState.FOREGROUND, "Foreground", "Active on screen")
         }
 
-        // Active foreground service (like IDM+ download, VPN, etc.)
+        // 1. ACTIVE DOWNLOADER / MEDIA PLAYBACK FOREGROUND SERVICE -> WORKING MODE (PROTECTED)
+        val isDownloaderOrMedia = isDownloaderOrMediaApp(packageName)
+        if (rootState.isForegroundService && isDownloaderOrMedia) {
+            return Triple(AppState.WORKING_STATE, "Active Task (Downloading / Media)", "Protected ongoing task")
+        }
+
+        // 2. RUNNING AS FOREGROUND SERVICE (EVADING RESTRICTIONS)
         if (rootState.isForegroundService) {
             return Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
         }
 
-        // Background running process
-        if (isIgnoredBattery || (hasWakeLockPerm && !wakeUpDetails.isCut) || wakeUpDetails.wakeupCount24h > 15) {
+        // 3. IN USER'S RECENTS -> Running in background (not protected working mode, stoppable)
+        if (rootState.isInRecents) {
+            return Triple(AppState.BACKGROUND_RUNNING, "Running in background", "In recent tasks")
+        }
+
+        // 4. BATTERY OPTIMIZATION EXEMPTION OR PERSISTENT ALARM DAEMON
+        if (isIgnoredBattery || wakeUpDetails.wakeupCount24h > 30) {
             return Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
         }
 
-        return Triple(AppState.WORKING_STATE, "Background service active", "")
+        // 5. REGULAR BACKGROUND RUNNING PROCESS (e.g. MovieBox, AyuGram, Claude, MT Manager)
+        return Triple(AppState.BACKGROUND_RUNNING, "Running in background", "")
     }
 
     private fun determineNonRootState(
@@ -395,62 +428,56 @@ class AppStatusDetector(private val context: Context) {
         isIgnoredBattery: Boolean,
         hasWakeLockPerm: Boolean,
         wakeUpDetails: WakeUpDetails,
-        isFlagStopped: Boolean
+        isFlagStopped: Boolean,
+        packageName: String
     ): Triple<AppState, String, String> {
-        // Check Foreground Service
-        if (nonRootActivity?.hasActiveForegroundService == true) {
-            return Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
+        val now = System.currentTimeMillis()
+        val isRunning = proc != null || (nonRootActivity != null && now - nonRootActivity.lastEventTimestamp < 180_000)
+
+        if (!isRunning) {
+            return if (isFlagStopped) {
+                Triple(AppState.BACKGROUND_FREE, "Hibernated", "")
+            } else {
+                Triple(AppState.CACHED, "Pending Hibernation", "Will hibernate after screen off")
+            }
         }
 
-        val now = System.currentTimeMillis()
         if (nonRootActivity != null) {
             val elapsed = now - nonRootActivity.lastEventTimestamp
-            if (nonRootActivity.lastEventType == UsageEvents.Event.ACTIVITY_RESUMED && elapsed < 90_000) {
-                return Triple(AppState.FOREGROUND, "Foreground", "Ignored running state")
+            if (nonRootActivity.lastEventType == UsageEvents.Event.ACTIVITY_RESUMED && elapsed < 60_000) {
+                return Triple(AppState.FOREGROUND, "Foreground", "Active on screen")
             }
         }
 
         if (proc != null) {
             val importance = proc.importance
-            return when {
-                importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND -> {
-                    Triple(AppState.FOREGROUND, "Foreground", "Ignored running state")
-                }
-                importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE ||
-                importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_SERVICE ||
-                importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE ||
-                importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_PERCEPTIBLE -> {
-                    if (isIgnoredBattery || (hasWakeLockPerm && !wakeUpDetails.isCut)) {
-                        Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
-                    } else {
-                        Triple(AppState.WORKING_STATE, "Background service active", "")
-                    }
-                }
-                importance >= ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED -> {
-                    Triple(AppState.CACHED, "Cached in RAM", "Will hibernate after screen off")
-                }
-                else -> {
-                    if (isIgnoredBattery || hasWakeLockPerm)
-                        Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
-                    else
-                        Triple(AppState.WORKING_STATE, "Background service active", "")
-                }
+            if (importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND) {
+                return Triple(AppState.FOREGROUND, "Foreground", "Active on screen")
             }
+
+            val isDownloaderOrMedia = isDownloaderOrMediaApp(packageName)
+            if (nonRootActivity?.hasActiveForegroundService == true && isDownloaderOrMedia) {
+                return Triple(AppState.WORKING_STATE, "Active Task (Downloading / Media)", "Protected ongoing task")
+            }
+
+            if (nonRootActivity?.hasActiveForegroundService == true ||
+                importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE) {
+                return Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
+            }
+
+            if (importance >= ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED) {
+                return Triple(AppState.CACHED, "Cached in RAM", "Will hibernate after screen off")
+            }
+
+            if (isIgnoredBattery) {
+                return Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
+            }
+
+            val recentHint = if (nonRootActivity?.isInRecents == true && (now - nonRootActivity.lastEventTimestamp < 10 * 60 * 1000L)) "In recent tasks" else ""
+            return Triple(AppState.BACKGROUND_RUNNING, "Running in background", recentHint)
         }
 
-        // If had recent activity in last 3 minutes
-        if (nonRootActivity != null && (now - nonRootActivity.lastEventTimestamp < 180_000)) {
-            return if (isIgnoredBattery || hasWakeLockPerm)
-                Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
-            else
-                Triple(AppState.WORKING_STATE, "Background service active", "")
-        }
-
-        return if (isFlagStopped) {
-            Triple(AppState.BACKGROUND_FREE, "Hibernated", "")
-        } else {
-            Triple(AppState.CACHED, "Pending Hibernation", "Will hibernate after screen off")
-        }
+        return Triple(AppState.BACKGROUND_RUNNING, "Running in background", "")
     }
 
     private fun detectWakeUpPaths(

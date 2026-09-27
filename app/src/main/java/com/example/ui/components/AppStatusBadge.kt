@@ -44,6 +44,7 @@ fun AppStatusBadge(
     val (bgColor, textColor, borderColor) = when (state) {
         AppState.FOREGROUND -> Triple(StateForegroundBg, StateForeground, StateForeground.copy(alpha = 0.3f))
         AppState.WORKING_STATE -> Triple(StateWorkingBg, StateWorking, StateWorking.copy(alpha = 0.3f))
+        AppState.BACKGROUND_RUNNING -> Triple(Color(0xFFEFF6FF), Color(0xFF2563EB), Color(0xFFBFDBFE))
         AppState.EVADING_RESTRICTIONS -> Triple(StateEvadingBg, StateEvading, StateEvading.copy(alpha = 0.4f))
         AppState.BACKGROUND_FREE -> Triple(StateFreeBg, StateFree, StateFree.copy(alpha = 0.3f))
         AppState.CACHED -> Triple(Color(0xFFF1F5F9), Color(0xFF475569), Color(0xFFCBD5E1))
@@ -73,6 +74,14 @@ fun AppStatusBadge(
                         contentDescription = null,
                         tint = StateWorking,
                         modifier = Modifier.size(12.dp)
+                    )
+                }
+                AppState.BACKGROUND_RUNNING -> {
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF2563EB))
                     )
                 }
                 AppState.EVADING_RESTRICTIONS -> {
