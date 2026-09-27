@@ -239,7 +239,11 @@ class AppStatusDetector(private val context: Context) {
     }
 
     fun checkUnsafeToForceStop(pkgInfo: PackageInfo, appName: String): Pair<Boolean, String> {
-        val pkg = pkgInfo.packageName.lowercase()
+        return checkUnsafeToForceStop(pkgInfo.packageName, appName)
+    }
+
+    fun checkUnsafeToForceStop(packageName: String, appName: String): Pair<Boolean, String> {
+        val pkg = packageName.lowercase()
         val name = appName.lowercase()
 
         // 1. Keyboards / Input Methods
@@ -397,29 +401,19 @@ class AppStatusDetector(private val context: Context) {
             return Triple(AppState.FOREGROUND, "Foreground", "Active on screen")
         }
 
-        // 1. ACTIVE DOWNLOADER / MEDIA PLAYBACK FOREGROUND SERVICE -> WORKING MODE (PROTECTED)
-        val isDownloaderOrMedia = isDownloaderOrMediaApp(packageName)
-        if (rootState.isForegroundService && isDownloaderOrMedia) {
-            return Triple(AppState.WORKING_STATE, "Active Task (Downloading / Media)", "Protected ongoing task")
-        }
-
-        // 2. RUNNING AS FOREGROUND SERVICE (EVADING RESTRICTIONS)
+        // 1. RUNNING AS FOREGROUND SERVICE (EVADING RESTRICTIONS)
         if (rootState.isForegroundService) {
             return Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
         }
 
-        // 3. IN USER'S RECENTS -> Running in background (not protected working mode, stoppable)
+        // 2. IN USER'S RECENTS -> Running in background (not protected working mode, stoppable)
         if (rootState.isInRecents) {
             return Triple(AppState.BACKGROUND_RUNNING, "Running in background", "In recent tasks")
         }
 
-        // 4. BATTERY OPTIMIZATION EXEMPTION OR PERSISTENT ALARM DAEMON
-        if (isIgnoredBattery || wakeUpDetails.wakeupCount24h > 30) {
-            return Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
-        }
-
-        // 5. REGULAR BACKGROUND RUNNING PROCESS (e.g. MovieBox, AyuGram, Claude, MT Manager)
-        return Triple(AppState.BACKGROUND_RUNNING, "Running in background", "")
+        // 3. REGULAR BACKGROUND RUNNING PROCESS (e.g. MovieBox, AyuGram, Claude, MT Manager)
+        val secondary = if (isIgnoredBattery) "Restricted running as foreground" else ""
+        return Triple(AppState.BACKGROUND_RUNNING, "Running in background", secondary)
     }
 
     private fun determineNonRootState(
@@ -455,11 +449,6 @@ class AppStatusDetector(private val context: Context) {
                 return Triple(AppState.FOREGROUND, "Foreground", "Active on screen")
             }
 
-            val isDownloaderOrMedia = isDownloaderOrMediaApp(packageName)
-            if (nonRootActivity?.hasActiveForegroundService == true && isDownloaderOrMedia) {
-                return Triple(AppState.WORKING_STATE, "Active Task (Downloading / Media)", "Protected ongoing task")
-            }
-
             if (nonRootActivity?.hasActiveForegroundService == true ||
                 importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE) {
                 return Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
@@ -469,11 +458,12 @@ class AppStatusDetector(private val context: Context) {
                 return Triple(AppState.CACHED, "Cached in RAM", "Will hibernate after screen off")
             }
 
-            if (isIgnoredBattery) {
-                return Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
-            }
+            val recentHint = if (nonRootActivity?.isInRecents == true && (now - nonRootActivity.lastEventTimestamp < 10 * 60 * 1000L)) {
+                "In recent tasks"
+            } else if (isIgnoredBattery) {
+                "Restricted running as foreground"
+            } else ""
 
-            val recentHint = if (nonRootActivity?.isInRecents == true && (now - nonRootActivity.lastEventTimestamp < 10 * 60 * 1000L)) "In recent tasks" else ""
             return Triple(AppState.BACKGROUND_RUNNING, "Running in background", recentHint)
         }
 

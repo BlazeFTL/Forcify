@@ -46,6 +46,10 @@ class PureStopPreferences(context: Context) {
         get() = prefs.getBoolean("hide_system_apps_add_list", true)
         set(value) = prefs.edit().putBoolean("hide_system_apps_add_list", value).apply()
 
+    var savedManagedPackages: Set<String>
+        get() = prefs.getStringSet("saved_managed_packages", emptySet()) ?: emptySet()
+        set(value) = prefs.edit().putStringSet("saved_managed_packages", value).apply()
+
     fun getCutPathsForPackage(packageName: String): Set<String> {
         return prefs.getStringSet("cut_paths_$packageName", emptySet()) ?: emptySet()
     }

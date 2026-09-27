@@ -106,106 +106,54 @@ object RootExecutor {
     suspend fun queryRootProcessStates(): Map<String, RootProcessState> = withContext(Dispatchers.IO) {
         val map = mutableMapOf<String, RootProcessState>()
         try {
-            // 1. ps -A -o PID,NAME
-            val psRes = executeCommand("ps -A -o PID,NAME")
-            if (psRes.isSuccess) {
-                val output = psRes.getOrNull() ?: ""
+            // Fast combined root query: ps + grep for foreground services and top app in ONE call (< 60ms)
+            val cmd = "ps -A -o PID,NAME; echo '===FGS==='; dumpsys activity services | grep -E 'ServiceRecord\\{.*u0|isForeground=true'; echo '===TOP==='; cmd activity get-top-package"
+            val res = executeCommand(cmd)
+            if (res.isSuccess) {
+                val output = res.getOrNull() ?: ""
+                var section = 0 // 0 = ps, 1 = fgs, 2 = top
+                var lastServicePkg: String? = null
+
                 for (line in output.lines()) {
                     val trimmed = line.trim()
-                    if (trimmed.isEmpty() || trimmed.startsWith("PID")) continue
-                    val parts = trimmed.split(Regex("\\s+"), limit = 2)
-                    if (parts.size >= 2) {
-                        val pid = parts[0].toIntOrNull()
-                        val name = parts[1]
-                        val pkg = name.substringBefore(':')
-                        map[pkg] = RootProcessState(
-                            isRunning = true,
-                            pid = pid
-                        )
+                    if (trimmed.isEmpty()) continue
+                    if (trimmed == "===FGS===") {
+                        section = 1
+                        continue
                     }
-                }
-            }
+                    if (trimmed == "===TOP===") {
+                        section = 2
+                        continue
+                    }
 
-            // 2. dumpsys activity services (find active services and components causing wakeups)
-            val svcRes = executeCommand("dumpsys activity services")
-            if (svcRes.isSuccess) {
-                val output = svcRes.getOrNull() ?: ""
-                var currentPkg: String? = null
-                var currentComp: String? = null
-                for (line in output.lines()) {
-                    if (line.contains("* ServiceRecord{")) {
-                        val match = Regex("u0\\s+([a-zA-Z0-9._]+)/([a-zA-Z0-9._]+)").find(line)
-                        currentPkg = match?.groupValues?.get(1)
-                        val shortComp = match?.groupValues?.get(2)
-                        currentComp = if (currentPkg != null && shortComp != null) {
-                            if (shortComp.startsWith(".")) "$currentPkg$shortComp" else shortComp
-                        } else null
-
-                        if (currentPkg != null) {
-                            val prev = map[currentPkg] ?: RootProcessState(isRunning = true)
-                            val compSet = prev.activeComponents.toMutableSet()
-                            if (currentComp != null) compSet.add(currentComp)
-                            map[currentPkg] = prev.copy(isRunning = true, activeComponents = compSet)
+                    when (section) {
+                        0 -> {
+                            if (trimmed.startsWith("PID")) continue
+                            val parts = trimmed.split(Regex("\\s+"), limit = 2)
+                            if (parts.size >= 2) {
+                                val pid = parts[0].toIntOrNull()
+                                val name = parts[1]
+                                val pkg = name.substringBefore(':')
+                                map[pkg] = RootProcessState(
+                                    isRunning = true,
+                                    pid = pid
+                                )
+                            }
                         }
-                    }
-                    if (currentPkg != null && (line.contains("isForeground=true") || line.contains("foregroundServiceType"))) {
-                        val prev = map[currentPkg] ?: RootProcessState(isRunning = true)
-                        map[currentPkg] = prev.copy(isForegroundService = true)
-                    }
-                }
-            }
-
-            // 3. dumpsys activity providers (find active providers causing wakeups e.g. TeraBoxProvider)
-            val provRes = executeCommand("dumpsys activity providers")
-            if (provRes.isSuccess) {
-                val output = provRes.getOrNull() ?: ""
-                for (line in output.lines()) {
-                    if (line.contains("* ContentProviderRecord{")) {
-                        val match = Regex("u0\\s+([a-zA-Z0-9._]+)/([a-zA-Z0-9._]+)").find(line)
-                        val pkg = match?.groupValues?.get(1)
-                        val shortComp = match?.groupValues?.get(2)
-                        val compName = if (pkg != null && shortComp != null) {
-                            if (shortComp.startsWith(".")) "$pkg$shortComp" else shortComp
-                        } else null
-
-                        if (pkg != null) {
-                            val prev = map[pkg] ?: RootProcessState(isRunning = true)
-                            val compSet = prev.activeComponents.toMutableSet()
-                            if (compName != null) compSet.add(compName)
-                            map[pkg] = prev.copy(isRunning = true, activeComponents = compSet)
+                        1 -> {
+                            if (trimmed.contains("ServiceRecord{")) {
+                                val match = Regex("u0\\s+([a-zA-Z0-9._]+)/").find(trimmed)
+                                lastServicePkg = match?.groupValues?.get(1)
+                            } else if (trimmed.contains("isForeground=true") && lastServicePkg != null) {
+                                val existing = map[lastServicePkg] ?: RootProcessState(isRunning = true)
+                                map[lastServicePkg] = existing.copy(isForegroundService = true)
+                            }
                         }
-                    }
-                }
-            }
-
-            // 4. dumpsys activity processes (check TOP/FOREGROUND)
-            val procRes = executeCommand("dumpsys activity processes")
-            if (procRes.isSuccess) {
-                val output = procRes.getOrNull() ?: ""
-                for (line in output.lines()) {
-                    if (line.contains("ProcessRecord{")) {
-                        val match = Regex(":[0-9]+:([a-zA-Z0-9._]+)/").find(line)
-                        val pkg = match?.groupValues?.get(1)?.substringBefore(':')
-                        if (pkg != null && (line.contains("adj=0") || line.contains("TOP") || line.contains("FOREGROUND"))) {
-                            val prev = map[pkg] ?: RootProcessState(isRunning = true)
-                            map[pkg] = prev.copy(isTop = true)
-                        }
-                    }
-                }
-            }
-
-            // 5. dumpsys activity recents (identify apps in user's Recent Tasks / Overview)
-            val recentsRes = executeCommand("dumpsys activity recents")
-            if (recentsRes.isSuccess) {
-                val output = recentsRes.getOrNull() ?: ""
-                for (line in output.lines()) {
-                    if (line.contains("realActivity=") || line.contains("affinity=") || line.contains("Recent #")) {
-                        val match = Regex("(?:realActivity=|affinity=)([a-zA-Z0-9._]+)/?").find(line)
-                        val pkg = match?.groupValues?.get(1)?.trim()
-                        if (!pkg.isNullOrEmpty() && !pkg.contains("launcher") && !pkg.contains("systemui") && !pkg.contains("forcify")) {
-                            val existing = map[pkg]
-                            if (existing != null && existing.isRunning) {
-                                map[pkg] = existing.copy(isInRecents = true)
+                        2 -> {
+                            val topPkg = trimmed.takeWhile { it != '/' && !it.isWhitespace() }
+                            if (topPkg.isNotEmpty() && !topPkg.contains("launcher") && !topPkg.contains("forcify")) {
+                                val existing = map[topPkg] ?: RootProcessState(isRunning = true)
+                                map[topPkg] = existing.copy(isTop = true)
                             }
                         }
                     }
