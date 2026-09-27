@@ -27,8 +27,11 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -36,6 +39,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -53,10 +57,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.material3.HorizontalDivider
 import com.example.model.AppSortOption
 import com.example.model.AppState
 import com.example.model.InstalledAppItem
@@ -313,6 +317,10 @@ fun AddAppsDialog(
             }
 
             // List of candidate apps
+            val (unsafeCandidateApps, safeCandidateApps) = remember(candidateApps) {
+                candidateApps.partition { it.isUnsafeToForceStop }
+            }
+
             if (isLoading) {
                 Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
@@ -331,7 +339,20 @@ fun AddAppsDialog(
                     contentPadding = PaddingValues(horizontal = 20.dp, vertical = 6.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(candidateApps, key = { it.packageName }) { app ->
+                    // Safe candidate apps
+                    if (safeCandidateApps.isNotEmpty() && unsafeCandidateApps.isNotEmpty()) {
+                        item {
+                            Text(
+                                text = "APPS TO FREEZE (${safeCandidateApps.size})",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(vertical = 4.dp, horizontal = 2.dp)
+                            )
+                        }
+                    }
+
+                    items(safeCandidateApps, key = { it.packageName }) { app ->
                         val isSelected = selectedPackages.value.contains(app.packageName)
                         Row(
                             modifier = Modifier
@@ -345,11 +366,7 @@ fun AddAppsDialog(
                                 )
                                 .clickable {
                                     val current = selectedPackages.value.toMutableSet()
-                                    if (isSelected) {
-                                        current.remove(app.packageName)
-                                    } else {
-                                        current.add(app.packageName)
-                                    }
+                                    if (isSelected) current.remove(app.packageName) else current.add(app.packageName)
                                     selectedPackages.value = current
                                 }
                                 .padding(12.dp),
@@ -407,6 +424,125 @@ fun AddAppsDialog(
                                 },
                                 colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary)
                             )
+                        }
+                    }
+
+                    // NOT SAFE TO FORCE STOP SECTION AT BOTTOM REQUESTED BY USER (SS 6 - 8)
+                    if (unsafeCandidateApps.isNotEmpty()) {
+                        item {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = Color(0xFFFFFBEB)
+                                ),
+                                shape = RoundedCornerShape(12.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFDE68A))
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.Top
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Warning,
+                                        contentDescription = null,
+                                        tint = Color(0xFFD97706),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text(
+                                            text = "NOT SAFE TO FORCE STOP (${unsafeCandidateApps.size})",
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF92400E)
+                                        )
+                                        Spacer(modifier = Modifier.height(3.dp))
+                                        Text(
+                                            text = "May cause notifications not appearing, typing/keyboard failures, or media/volume issues. You can still select and add them if desired.",
+                                            fontSize = 11.sp,
+                                            color = Color(0xFF78350F),
+                                            lineHeight = 15.sp
+                                        )
+                                    }
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                        }
+
+                        items(unsafeCandidateApps, key = { it.packageName }) { app ->
+                            val isSelected = selectedPackages.value.contains(app.packageName)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MaterialTheme.colorScheme.surface)
+                                    .border(
+                                        width = 1.dp,
+                                        color = if (isSelected) Color(0xFFF59E0B) else Color(0xFFFDE68A),
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                    .clickable {
+                                        val current = selectedPackages.value.toMutableSet()
+                                        if (isSelected) current.remove(app.packageName) else current.add(app.packageName)
+                                        selectedPackages.value = current
+                                    }
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                AppIconImage(drawable = app.icon, appName = app.appName, size = 42.dp)
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = app.appName,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            modifier = Modifier.weight(1f, fill = false)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(Color(0xFFFEF3C7))
+                                                .padding(horizontal = 5.dp, vertical = 1.dp)
+                                        ) {
+                                            Text(text = "Caution", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFFB45309))
+                                        }
+                                    }
+                                    Text(
+                                        text = app.packageName,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1
+                                    )
+                                    Spacer(modifier = Modifier.height(3.dp))
+                                    Text(
+                                        text = "⚠️ ${app.unsafeReason}",
+                                        fontSize = 10.sp,
+                                        color = Color(0xFFB45309),
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 2,
+                                        lineHeight = 13.sp
+                                    )
+                                }
+                                Checkbox(
+                                    checked = isSelected,
+                                    onCheckedChange = { checked ->
+                                        val current = selectedPackages.value.toMutableSet()
+                                        if (checked) current.add(app.packageName) else current.remove(app.packageName)
+                                        selectedPackages.value = current
+                                    },
+                                    colors = CheckboxDefaults.colors(
+                                        checkedColor = Color(0xFFD97706),
+                                        checkmarkColor = Color.White
+                                    )
+                                )
+                            }
                         }
                     }
                 }

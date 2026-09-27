@@ -32,6 +32,8 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Refresh
@@ -101,6 +103,9 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
     val operatingMode by viewModel.operatingMode.collectAsState()
     val allManagedApps by viewModel.allManagedApps.collectAsState()
     val pendingApps by viewModel.pendingApps.collectAsState()
+    val notHibernatingApps by viewModel.notHibernatingApps.collectAsState()
+    val willHibernateSoonApps by viewModel.willHibernateSoonApps.collectAsState()
+    val hibernatedApps by viewModel.hibernatedApps.collectAsState()
     val allInstalledApps by viewModel.allInstalledApps.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val isLoadingAddApps by viewModel.isLoadingAddApps.collectAsState()
@@ -116,6 +121,7 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
     var showMenu by remember { mutableStateOf(false) }
     var showModeDialog by remember { mutableStateOf(false) }
     var isSearchExpanded by remember { mutableStateOf(false) }
+    var isHibernatedSectionExpanded by remember { mutableStateOf(false) }
 
     // Multi-select for batch stopping requested by user
     var selectedPackagesForBatchStop by remember { mutableStateOf(setOf<String>()) }
@@ -132,10 +138,28 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
         }
     }
 
-    // Apply search filter strictly to running apps only
-    val filteredRunning = remember(pendingApps, searchQuery) {
-        if (searchQuery.isBlank()) pendingApps else {
-            pendingApps.filter {
+    // Filtered lists for each category
+    val filteredNotHibernating = remember(notHibernatingApps, searchQuery) {
+        if (searchQuery.isBlank()) notHibernatingApps else {
+            notHibernatingApps.filter {
+                it.appName.contains(searchQuery, ignoreCase = true) ||
+                it.packageName.contains(searchQuery, ignoreCase = true)
+            }
+        }
+    }
+
+    val filteredWillHibernateSoon = remember(willHibernateSoonApps, searchQuery) {
+        if (searchQuery.isBlank()) willHibernateSoonApps else {
+            willHibernateSoonApps.filter {
+                it.appName.contains(searchQuery, ignoreCase = true) ||
+                it.packageName.contains(searchQuery, ignoreCase = true)
+            }
+        }
+    }
+
+    val filteredHibernated = remember(hibernatedApps, searchQuery) {
+        if (searchQuery.isBlank()) hibernatedApps else {
+            hibernatedApps.filter {
                 it.appName.contains(searchQuery, ignoreCase = true) ||
                 it.packageName.contains(searchQuery, ignoreCase = true)
             }
@@ -144,9 +168,7 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
 
     val stoppableCount = remember(pendingApps) {
         pendingApps.count {
-            it.state == AppState.FOREGROUND ||
-            it.state == AppState.EVADING_RESTRICTIONS ||
-            (it.state == AppState.WORKING_STATE && it.ignoreWorkingState)
+            it.state != AppState.WORKING_STATE || it.ignoreWorkingState
         }
     }
 
@@ -178,14 +200,15 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                         )
                     },
                     actions = {
-                        val allSelected = filteredRunning.isNotEmpty() &&
-                            filteredRunning.all { selectedPackagesForBatchStop.contains(it.packageName) }
+                        val selectable = if (searchQuery.isBlank()) pendingApps else (filteredNotHibernating + filteredWillHibernateSoon)
+                        val allSelected = selectable.isNotEmpty() &&
+                            selectable.all { selectedPackagesForBatchStop.contains(it.packageName) }
                         TextButton(
                             onClick = {
                                 selectedPackagesForBatchStop = if (allSelected) {
                                     emptySet()
                                 } else {
-                                    filteredRunning.map { it.packageName }.toSet()
+                                    selectable.map { it.packageName }.toSet()
                                 }
                             }
                         ) {
@@ -472,19 +495,37 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                     isSearchActive = searchQuery.isNotBlank(),
                     onAddApps = { viewModel.openAddApps() }
                 )
-            } else if (filteredRunning.isEmpty()) {
-                // All apps in the freeze list are stopped/hibernated!
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    AllHibernatedCleanCard(
-                        managedCount = allManagedApps.size,
-                        onAddMore = { viewModel.openAddApps() }
+            } else if (filteredNotHibernating.isEmpty() && filteredWillHibernateSoon.isEmpty()) {
+                if (allManagedApps.isEmpty()) {
+                    EmptyStateView(
+                        isSearchActive = searchQuery.isNotBlank(),
+                        onAddApps = { viewModel.openAddApps() }
                     )
+                } else if (searchQuery.isNotBlank() && filteredHibernated.isEmpty()) {
+                    Box(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "No apps match '$searchQuery'",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 14.sp
+                        )
+                    }
+                } else {
+                    // All managed apps are in hibernated state!
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AllHibernatedCleanCard(
+                            managedCount = allManagedApps.size,
+                            onAddMore = { viewModel.openAddApps() }
+                        )
+                    }
                 }
             } else {
                 LazyColumn(
@@ -492,58 +533,171 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    item {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 4.dp, vertical = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = if (isMultiSelectMode) "LONG PRESS OR TAP APPS TO SELECT" else "NOT HIBERNATING AUTOMATICALLY (${filteredRunning.size})",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            if (!isMultiSelectMode && protectedWorkingCount > 0) {
+                    // 1. NOT HIBERNATING AUTOMATICALLY SECTION
+                    if (filteredNotHibernating.isNotEmpty()) {
+                        item {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp, vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Text(
-                                    text = "$protectedWorkingCount Working Protected",
-                                    fontSize = 11.sp,
-                                    color = StateWorking,
-                                    fontWeight = FontWeight.SemiBold
+                                    text = if (isMultiSelectMode) "LONG PRESS OR TAP APPS TO SELECT" else "NOT HIBERNATING AUTOMATICALLY (${filteredNotHibernating.size})",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                            } else {
+                                if (!isMultiSelectMode && protectedWorkingCount > 0) {
+                                    Text(
+                                        text = "$protectedWorkingCount Working Protected",
+                                        fontSize = 11.sp,
+                                        color = StateWorking,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                } else {
+                                    Text(
+                                        text = "${filteredNotHibernating.size} Running",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                        }
+                        items(filteredNotHibernating, key = { it.packageName }) { app ->
+                            val isSelected = selectedPackagesForBatchStop.contains(app.packageName)
+                            GreenifyStyleAppCard(
+                                app = app,
+                                isSelectionMode = isMultiSelectMode,
+                                isSelected = isSelected,
+                                onToggleSelect = {
+                                    selectedPackagesForBatchStop = if (isSelected) {
+                                        selectedPackagesForBatchStop - app.packageName
+                                    } else {
+                                        selectedPackagesForBatchStop + app.packageName
+                                    }
+                                },
+                                onLongClick = {
+                                    selectedPackagesForBatchStop = selectedPackagesForBatchStop + app.packageName
+                                },
+                                onForceStop = { viewModel.forceStopSingle(app) },
+                                onOpenWakeup = { viewModel.selectAppForWakeup(app) },
+                                onRemove = { viewModel.removeAppFromFreezeList(app.packageName) },
+                                onToggleIgnoreWorking = { viewModel.toggleIgnoreWorkingState(app) }
+                            )
+                        }
+                    }
+
+                    // 2. WILL HIBERNATE SOON AFTER SCREEN GOES OFF SECTION
+                    if (filteredWillHibernateSoon.isNotEmpty()) {
+                        item {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp, vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Text(
-                                    text = "${allManagedApps.size} Managed",
+                                    text = "WILL HIBERNATE SOON AFTER SCREEN GOES OFF (${filteredWillHibernateSoon.size})",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "${filteredWillHibernateSoon.size} Pending",
                                     fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.primary,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontWeight = FontWeight.SemiBold
                                 )
                             }
                         }
+                        items(filteredWillHibernateSoon, key = { it.packageName }) { app ->
+                            val isSelected = selectedPackagesForBatchStop.contains(app.packageName)
+                            GreenifyStyleAppCard(
+                                app = app,
+                                isSelectionMode = isMultiSelectMode,
+                                isSelected = isSelected,
+                                onToggleSelect = {
+                                    selectedPackagesForBatchStop = if (isSelected) {
+                                        selectedPackagesForBatchStop - app.packageName
+                                    } else {
+                                        selectedPackagesForBatchStop + app.packageName
+                                    }
+                                },
+                                onLongClick = {
+                                    selectedPackagesForBatchStop = selectedPackagesForBatchStop + app.packageName
+                                },
+                                onForceStop = { viewModel.forceStopSingle(app) },
+                                onOpenWakeup = { viewModel.selectAppForWakeup(app) },
+                                onRemove = { viewModel.removeAppFromFreezeList(app.packageName) },
+                                onToggleIgnoreWorking = { viewModel.toggleIgnoreWorkingState(app) }
+                            )
+                        }
                     }
-                    items(filteredRunning, key = { it.packageName }) { app ->
-                        val isSelected = selectedPackagesForBatchStop.contains(app.packageName)
-                        GreenifyStyleAppCard(
-                            app = app,
-                            isSelectionMode = isMultiSelectMode,
-                            isSelected = isSelected,
-                            onToggleSelect = {
-                                selectedPackagesForBatchStop = if (isSelected) {
-                                    selectedPackagesForBatchStop - app.packageName
-                                } else {
-                                    selectedPackagesForBatchStop + app.packageName
+
+                    // 3. HIBERNATED SECTION (Collapsible)
+                    if (filteredHibernated.isNotEmpty()) {
+                        item {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { isHibernatedSectionExpanded = !isHibernatedSectionExpanded }
+                                    .padding(horizontal = 4.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = if (isHibernatedSectionExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "HIBERNATED (${filteredHibernated.size})",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
-                            },
-                            onLongClick = {
-                                selectedPackagesForBatchStop = selectedPackagesForBatchStop + app.packageName
-                            },
-                            onForceStop = { viewModel.forceStopSingle(app) },
-                            onOpenWakeup = { viewModel.selectAppForWakeup(app) },
-                            onRemove = { viewModel.removeAppFromFreezeList(app.packageName) },
-                            onToggleIgnoreWorking = { viewModel.toggleIgnoreWorkingState(app) }
-                        )
+                                Text(
+                                    text = if (isHibernatedSectionExpanded) "Tap to collapse" else "Tap to expand",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        if (isHibernatedSectionExpanded) {
+                            items(filteredHibernated, key = { it.packageName }) { app ->
+                                val isSelected = selectedPackagesForBatchStop.contains(app.packageName)
+                                GreenifyStyleAppCard(
+                                    app = app,
+                                    isSelectionMode = isMultiSelectMode,
+                                    isSelected = isSelected,
+                                    onToggleSelect = {
+                                        selectedPackagesForBatchStop = if (isSelected) {
+                                            selectedPackagesForBatchStop - app.packageName
+                                        } else {
+                                            selectedPackagesForBatchStop + app.packageName
+                                        }
+                                    },
+                                    onLongClick = {
+                                        selectedPackagesForBatchStop = selectedPackagesForBatchStop + app.packageName
+                                    },
+                                    onForceStop = { viewModel.forceStopSingle(app) },
+                                    onOpenWakeup = { viewModel.selectAppForWakeup(app) },
+                                    onRemove = { viewModel.removeAppFromFreezeList(app.packageName) },
+                                    onToggleIgnoreWorking = { viewModel.toggleIgnoreWorkingState(app) }
+                                )
+                            }
+                        }
                     }
                 }
             }

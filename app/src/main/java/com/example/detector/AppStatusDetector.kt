@@ -197,11 +197,15 @@ class AppStatusDetector(private val context: Context) {
 
         val nonRootActivity = nonRootActivityMap[pkg]
         val runningProc = runningMap[pkg]
+        val isFlagStopped = (appInfo.flags and ApplicationInfo.FLAG_STOPPED) != 0
+        val isRunning = (rootState?.isRunning == true) || (runningProc != null)
+        val isStoppedState = isFlagStopped && !isRunning
+        val (isUnsafe, unsafeReason) = checkUnsafeToForceStop(pkgInfo, appName)
 
         val (state, stateDetail, secondaryDetail) = if (isRootMode && rootProcessMap.isNotEmpty()) {
-            determineRootState(rootState, isIgnoredBattery, hasWakeLockPerm, wakeUpDetails)
+            determineRootState(rootState, isIgnoredBattery, hasWakeLockPerm, wakeUpDetails, isFlagStopped)
         } else {
-            determineNonRootState(runningProc, nonRootActivity, isIgnoredBattery, hasWakeLockPerm, wakeUpDetails)
+            determineNonRootState(runningProc, nonRootActivity, isIgnoredBattery, hasWakeLockPerm, wakeUpDetails, isFlagStopped)
         }
 
         val icon = try {
@@ -221,18 +225,151 @@ class AppStatusDetector(private val context: Context) {
             pid = rootState?.pid ?: runningProc?.pid,
             wakeUpDetails = wakeUpDetails,
             isSystemApp = isSystem,
-            isManaged = managedPackages.contains(pkg)
+            isManaged = managedPackages.contains(pkg),
+            isStoppedState = isStoppedState,
+            isUnsafeToForceStop = isUnsafe,
+            unsafeReason = unsafeReason
         )
+    }
+
+    fun checkUnsafeToForceStop(pkgInfo: PackageInfo, appName: String): Pair<Boolean, String> {
+        val pkg = pkgInfo.packageName.lowercase()
+        val name = appName.lowercase()
+
+        // 1. Keyboards / Input Methods
+        val isInputMethod = pkg.contains("inputmethod") ||
+            pkg.contains("keyboard") ||
+            pkg.contains("gboard") ||
+            pkg.contains("ime") ||
+            name.contains("keyboard") ||
+            name.contains("gboard") ||
+            name.contains("ime") ||
+            pkg == "com.google.android.inputmethod.latin" ||
+            pkg == "com.touchtype.swiftkey" ||
+            pkg == "com.syntellia.fleksy.keyboard"
+
+        if (isInputMethod) {
+            return Pair(true, "Keyboard / Input Method (typing will stop working)")
+        }
+
+        // 2. Volume Boosters / Sound Enhancers / Equalizers
+        val isVolumeOrSound = pkg.contains("volume") ||
+            pkg.contains("booster") ||
+            pkg.contains("equalizer") ||
+            pkg.contains("sound") ||
+            name.contains("volume") ||
+            name.contains("booster") ||
+            name.contains("equalizer") ||
+            name.contains("sound booster") ||
+            pkg == "com.goodev.volume.booster" ||
+            pkg == "com.pmml.callvolumebooster" ||
+            name.contains("volume-screenshot-qs")
+
+        if (isVolumeOrSound) {
+            return Pair(true, "Volume / Audio Enhancer (media/sound issues)")
+        }
+
+        // 3. Instant Messaging & Calling (Notifications / calls not appearing)
+        val isMessengerOrCalling = pkg == "com.whatsapp" ||
+            pkg == "com.facebook.orca" ||
+            pkg == "com.facebook.lite" ||
+            pkg == "com.instagram.android" ||
+            pkg == "org.telegram.messenger" ||
+            pkg == "org.thoughtcrime.securesms" ||
+            pkg == "com.discord" ||
+            pkg == "com.skype.raider" ||
+            pkg == "com.viber.voip" ||
+            pkg == "com.tencent.mm" ||
+            pkg == "jp.naver.line.android" ||
+            name.contains("whatsapp") ||
+            name.contains("messenger") ||
+            name.contains("telegram") ||
+            name.contains("signal") ||
+            name.contains("discord") ||
+            name.contains("viber") ||
+            name.contains("wechat")
+
+        if (isMessengerOrCalling) {
+            return Pair(true, "Instant Messaging & Calls (notifications/calls will be missed)")
+        }
+
+        // 4. Emergency Alerts & Alarms
+        val isEmergencyOrAlarm = pkg.contains("earthquake") ||
+            pkg.contains("emergency") ||
+            pkg.contains("alert") ||
+            pkg.contains("alarm") ||
+            pkg.contains("clock") ||
+            pkg.contains("sos") ||
+            name.contains("earthquake") ||
+            name.contains("alert") ||
+            name.contains("emergency") ||
+            name.contains("alarm") ||
+            pkg == "com.jrustonapps.myearthquakealerts"
+
+        if (isEmergencyOrAlarm) {
+            return Pair(true, "Alerts & Alarms (emergency or timed notifications won't sound)")
+        }
+
+        // 5. System Utilities, Root Tools, Find Device, Accessibility
+        val isSystemUtil = pkg == "com.coderstory.toolkit" ||
+            pkg == "org.frknkrc44.hma_oss" ||
+            pkg == "com.oasis.greenify" ||
+            pkg == "com.oasisfeng.greenify" ||
+            pkg == "com.google.android.apps.adm" ||
+            pkg == "com.topjohnwu.magisk" ||
+            pkg == "io.github.vvb2060.magisk" ||
+            pkg == "me.weishu.kernelsu" ||
+            name.contains("core patch") ||
+            name.contains("hma-oss") ||
+            name.contains("find hub") ||
+            name.contains("greenify")
+
+        if (isSystemUtil) {
+            return Pair(true, "System / Security Utility (may disrupt background system features)")
+        }
+
+        // 6. Home Launchers (Screenshots showed Spark Launcher, Nova, etc.)
+        val isLauncher = pkg.contains("launcher") ||
+            name.contains("launcher") ||
+            pkg.contains("spark") ||
+            name.contains("spark") ||
+            name.contains("lawnchair") ||
+            name.contains("nova") ||
+            pkg == "com.teslacoilsw.launcher"
+
+        if (isLauncher) {
+            return Pair(true, "Home Launcher (closing will reset home screen and recents)")
+        }
+
+        // 7. VPN / Network Filters
+        val isVpn = pkg.contains("vpn") ||
+            name.contains("vpn") ||
+            pkg.contains("wireguard") ||
+            pkg.contains("adguard") ||
+            name.contains("adguard") ||
+            name.contains("clash") ||
+            pkg.contains("clash")
+
+        if (isVpn) {
+            return Pair(true, "VPN / Network Service (disconnects active filtering/proxy)")
+        }
+
+        return Pair(false, "")
     }
 
     private fun determineRootState(
         rootState: RootProcessState?,
         isIgnoredBattery: Boolean,
         hasWakeLockPerm: Boolean,
-        wakeUpDetails: WakeUpDetails
+        wakeUpDetails: WakeUpDetails,
+        isFlagStopped: Boolean
     ): Triple<AppState, String, String> {
         if (rootState == null || !rootState.isRunning) {
-            return Triple(AppState.BACKGROUND_FREE, "Hibernated", "")
+            return if (isFlagStopped) {
+                Triple(AppState.BACKGROUND_FREE, "Hibernated", "")
+            } else {
+                Triple(AppState.CACHED, "Pending Hibernation", "Will hibernate after screen off")
+            }
         }
 
         if (rootState.isTop) {
@@ -257,7 +394,8 @@ class AppStatusDetector(private val context: Context) {
         nonRootActivity: NonRootProcessActivity?,
         isIgnoredBattery: Boolean,
         hasWakeLockPerm: Boolean,
-        wakeUpDetails: WakeUpDetails
+        wakeUpDetails: WakeUpDetails,
+        isFlagStopped: Boolean
     ): Triple<AppState, String, String> {
         // Check Foreground Service
         if (nonRootActivity?.hasActiveForegroundService == true) {
@@ -289,7 +427,7 @@ class AppStatusDetector(private val context: Context) {
                     }
                 }
                 importance >= ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED -> {
-                    Triple(AppState.CACHED, "Cached in RAM", "")
+                    Triple(AppState.CACHED, "Cached in RAM", "Will hibernate after screen off")
                 }
                 else -> {
                     if (isIgnoredBattery || hasWakeLockPerm)
@@ -308,7 +446,11 @@ class AppStatusDetector(private val context: Context) {
                 Triple(AppState.WORKING_STATE, "Background service active", "")
         }
 
-        return Triple(AppState.BACKGROUND_FREE, "Hibernated", "")
+        return if (isFlagStopped) {
+            Triple(AppState.BACKGROUND_FREE, "Hibernated", "")
+        } else {
+            Triple(AppState.CACHED, "Pending Hibernation", "Will hibernate after screen off")
+        }
     }
 
     private fun detectWakeUpPaths(

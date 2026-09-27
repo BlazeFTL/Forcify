@@ -99,7 +99,10 @@ data class InstalledAppItem(
     val freezeCount: Int = 0,
     val firstInstallTime: Long = 0L,
     val appSize: Long = 0L,
-    val ignoreWorkingState: Boolean = false
+    val ignoreWorkingState: Boolean = false,
+    val isStoppedState: Boolean = false,
+    val isUnsafeToForceStop: Boolean = false,
+    val unsafeReason: String = ""
 )
 
 data class BatchFreezeProgress(
