@@ -894,6 +894,24 @@ class AppStatusDetector(private val context: Context) {
         map
     }
 
+    fun getBootReceiversForPackage(pkgInfo: PackageInfo): List<String> {
+        val bootComponents = mutableListOf<String>()
+        val receivers = pkgInfo.receivers ?: return bootComponents
+        for (receiver in receivers) {
+            val simpleName = receiver.name.substringAfterLast('.')
+            val fullName = receiver.name
+            if (simpleName.contains("Boot", ignoreCase = true) ||
+                simpleName.contains("Startup", ignoreCase = true) ||
+                simpleName.contains("Reboot", ignoreCase = true) ||
+                fullName.contains("boot", ignoreCase = true) ||
+                fullName.contains("startup", ignoreCase = true)
+            ) {
+                bootComponents.add(fullName)
+            }
+        }
+        return bootComponents
+    }
+
     private fun fallbackAppItem(pkg: String) = InstalledAppItem(
         packageName = pkg,
         appName = pkg,
@@ -901,3 +919,14 @@ class AppStatusDetector(private val context: Context) {
         stateDetail = "Hibernated"
     )
 }
+
+data class BootReceiverItem(
+    val packageName: String,
+    val appName: String,
+    val icon: android.graphics.drawable.Drawable?,
+    val hasBootPermission: Boolean,
+    val bootReceiverCount: Int,
+    val bootReceiverComponents: List<String>,
+    val isCut: Boolean,
+    val isSystemApp: Boolean
+)

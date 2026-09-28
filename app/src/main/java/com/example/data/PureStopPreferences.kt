@@ -50,6 +50,18 @@ class PureStopPreferences(context: Context) {
         get() = prefs.getStringSet("saved_managed_packages", emptySet()) ?: emptySet()
         set(value) = prefs.edit().putStringSet("saved_managed_packages", value).apply()
 
+    var savedPendingPackages: Set<String>
+        get() = prefs.getStringSet("saved_pending_packages", emptySet()) ?: emptySet()
+        set(value) = prefs.edit().putStringSet("saved_pending_packages", value).apply()
+
+    fun isBootCutForPackage(packageName: String): Boolean {
+        return prefs.getBoolean("boot_cut_$packageName", false)
+    }
+
+    fun setBootCutForPackage(packageName: String, cut: Boolean) {
+        prefs.edit().putBoolean("boot_cut_$packageName", cut).apply()
+    }
+
     fun getCutPathsForPackage(packageName: String): Set<String> {
         return prefs.getStringSet("cut_paths_$packageName", emptySet()) ?: emptySet()
     }

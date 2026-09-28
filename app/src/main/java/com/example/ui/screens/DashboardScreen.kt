@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PowerOff
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -111,6 +112,8 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
     val isLoadingAddApps by viewModel.isLoadingAddApps.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val showAddAppsSheet by viewModel.showAddAppsSheet.collectAsState()
+    val showCutBootDialog by viewModel.showCutBootDialog.collectAsState()
+    val isInitialScanCompleted by viewModel.isInitialScanCompleted.collectAsState()
     val hideSystemAppsInAddList by viewModel.hideSystemAppsInAddList.collectAsState()
     val addAppSortOption by viewModel.addAppSortOption.collectAsState()
     val selectedAppForWakeup by viewModel.selectedAppForWakeup.collectAsState()
@@ -353,6 +356,16 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                                     }
                                 )
                                 DropdownMenuItem(
+                                    text = { Text("Cut Boot Receivers") },
+                                    onClick = {
+                                        showMenu = false
+                                        viewModel.openCutBootDialog()
+                                    },
+                                    leadingIcon = {
+                                        Icon(imageVector = Icons.Default.PowerOff, contentDescription = null)
+                                    }
+                                )
+                                DropdownMenuItem(
                                     text = { Text("Switch Operating Mode") },
                                     onClick = {
                                         showMenu = false
@@ -501,6 +514,14 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                         isSearchActive = searchQuery.isNotBlank(),
                         onAddApps = { viewModel.openAddApps() }
                     )
+                } else if (!isInitialScanCompleted) {
+                    // Smooth initial scan in progress, do not flash empty state
+                    Box(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(36.dp), strokeWidth = 3.dp)
+                    }
                 } else if (searchQuery.isNotBlank() && filteredHibernated.isEmpty()) {
                     Box(
                         modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -721,6 +742,14 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
         )
     }
 
+    // Cut Boot Receivers Dialog
+    if (showCutBootDialog) {
+        CutBootReceiversDialog(
+            viewModel = viewModel,
+            onDismiss = { viewModel.closeCutBootDialog() }
+        )
+    }
+
     // Wake-Up Inspection & Granular Cut Dialog
     selectedAppForWakeup?.let { app ->
         WakeUpCutDialog(
@@ -789,12 +818,17 @@ private fun GreenifyStyleAppCard(
 ) {
     var showItemMenu by remember { mutableStateOf(false) }
 
+    val isWillHibernateSoon = app.state != AppState.FOREGROUND &&
+        app.state != AppState.EVADING_RESTRICTIONS &&
+        app.state != AppState.WORKING_STATE
+
     val stateText = when {
-        app.stateDetail.isNotBlank() -> app.stateDetail
         app.state == AppState.EVADING_RESTRICTIONS -> "Running as foreground (evading restrictions)"
-        app.state == AppState.FOREGROUND -> "Foreground (Ignored running state)"
-        app.state == AppState.WORKING_STATE -> "Background service active"
-        else -> app.state.label
+        app.state == AppState.FOREGROUND -> "Foreground"
+        app.state == AppState.WORKING_STATE -> "Active Task (Downloading / Media)"
+        isWillHibernateSoon -> ""
+        app.stateDetail.isNotBlank() && app.stateDetail != "Hibernated" && app.stateDetail != "Pending Hibernation" -> app.stateDetail
+        else -> ""
     }
 
     val stateColor = when (app.state) {
@@ -861,17 +895,30 @@ private fun GreenifyStyleAppCard(
                         modifier = Modifier.weight(1f, fill = false)
                     )
                 }
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = stateText,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = stateColor,
-                    maxLines = 1
-                )
-                if (app.secondaryDetail.isNotBlank()) {
+
+                if (stateText.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = app.secondaryDetail,
+                        text = stateText,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = stateColor,
+                        maxLines = 1
+                    )
+                }
+
+                val hasRestrictedForeground = app.secondaryDetail.contains("Restricted running as foreground", ignoreCase = true)
+                val hasRecentTask = app.secondaryDetail.contains("In recent tasks", ignoreCase = true)
+                val displaySecondary = if (hasRestrictedForeground) {
+                    "Restricted running as foreground"
+                } else if (hasRecentTask && !isWillHibernateSoon) {
+                    "In recent tasks"
+                } else ""
+
+                if (displaySecondary.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(1.dp))
+                    Text(
+                        text = displaySecondary,
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1

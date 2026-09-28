@@ -160,11 +160,23 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
     private val _showAddAppsSheet = MutableStateFlow(false)
     val showAddAppsSheet: StateFlow<Boolean> = _showAddAppsSheet.asStateFlow()
 
+    private val _showCutBootDialog = MutableStateFlow(false)
+    val showCutBootDialog: StateFlow<Boolean> = _showCutBootDialog.asStateFlow()
+
     private val _selectedAppForWakeup = MutableStateFlow<InstalledAppItem?>(null)
     val selectedAppForWakeup: StateFlow<InstalledAppItem?> = _selectedAppForWakeup.asStateFlow()
 
     private val _statusMessage = MutableStateFlow<String?>(null)
     val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
+
+    private val _isInitialScanCompleted = MutableStateFlow(false)
+    val isInitialScanCompleted: StateFlow<Boolean> = _isInitialScanCompleted.asStateFlow()
+
+    private val _bootReceiverApps = MutableStateFlow<List<com.example.detector.BootReceiverItem>>(emptyList())
+    val bootReceiverApps: StateFlow<List<com.example.detector.BootReceiverItem>> = _bootReceiverApps.asStateFlow()
+
+    private val _isLoadingBootReceivers = MutableStateFlow(false)
+    val isLoadingBootReceivers: StateFlow<Boolean> = _isLoadingBootReceivers.asStateFlow()
 
     private var liveMonitoringJob: Job? = null
 
@@ -172,6 +184,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
         checkPermissions()
         // Instant synchronous pre-population from cached packages (< 5ms, 0 delay, 0 spinner!)
         val savedPkgs = preferences.savedManagedPackages
+        val savedPendingPkgs = preferences.savedPendingPackages
         if (savedPkgs.isNotEmpty()) {
             val pm = getApplication<Application>().packageManager
             val initialList = mutableListOf<InstalledAppItem>()
@@ -182,16 +195,17 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                     val icon = try { pm.getApplicationIcon(appInfo) } catch (e: Exception) { null }
                     val isFlagStopped = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_STOPPED) != 0
                     val (isUnsafe, unsafeReason) = detector.checkUnsafeToForceStop(pkg, appName)
+                    val isPending = savedPendingPkgs.contains(pkg) || (!isFlagStopped && savedPendingPkgs.isEmpty())
                     initialList.add(
                         InstalledAppItem(
                             packageName = pkg,
                             appName = appName,
                             icon = icon,
-                            state = if (isFlagStopped) AppState.BACKGROUND_FREE else AppState.CACHED,
-                            stateDetail = if (isFlagStopped) "Hibernated" else "Pending Hibernation",
-                            secondaryDetail = if (isFlagStopped) "" else "Will hibernate after screen off",
+                            state = if (isPending) AppState.CACHED else AppState.BACKGROUND_FREE,
+                            stateDetail = if (isPending) "Pending Hibernation" else "Hibernated",
+                            secondaryDetail = "",
                             isManaged = true,
-                            isStoppedState = isFlagStopped,
+                            isStoppedState = !isPending,
                             isUnsafeToForceStop = isUnsafe,
                             unsafeReason = unsafeReason
                         )
@@ -469,12 +483,118 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
 
                     _managedAppsFlow.value = resultList
                     preferences.savedManagedPackages = entities.map { it.packageName }.toSet()
+                    preferences.savedPendingPackages = resultList.filter { !it.isStoppedState && it.state != AppState.BACKGROUND_FREE }.map { it.packageName }.toSet()
+                    _isInitialScanCompleted.value = true
                 }
             } catch (e: Exception) {
                 // Ignore
             } finally {
                 _isLoading.value = false
             }
+        }
+    }
+
+    fun openCutBootDialog() {
+        _showCutBootDialog.value = true
+        loadBootReceivers()
+    }
+
+    fun closeCutBootDialog() {
+        _showCutBootDialog.value = false
+    }
+
+    fun loadBootReceivers() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _isLoadingBootReceivers.value = true
+            try {
+                val pm = getApplication<Application>().packageManager
+                val packages = pm.getInstalledPackages(PackageManager.GET_PERMISSIONS or PackageManager.GET_RECEIVERS)
+                val list = mutableListOf<com.example.detector.BootReceiverItem>()
+                val managedPkgs = preferences.savedManagedPackages
+
+                for (pkgInfo in packages) {
+                    val appInfo = pkgInfo.applicationInfo ?: continue
+                    val isSystem = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+                    val hasBootPerm = pkgInfo.requestedPermissions?.contains("android.permission.RECEIVE_BOOT_COMPLETED") == true
+                    val bootComponents = detector.getBootReceiversForPackage(pkgInfo)
+
+                    if (hasBootPerm || bootComponents.isNotEmpty()) {
+                        val appName = try {
+                            pm.getApplicationLabel(appInfo).toString()
+                        } catch (e: Exception) {
+                            pkgInfo.packageName
+                        }
+                        val icon = try { pm.getApplicationIcon(appInfo) } catch (e: Exception) { null }
+                        val isCut = preferences.isBootCutForPackage(pkgInfo.packageName)
+                        list.add(
+                            com.example.detector.BootReceiverItem(
+                                packageName = pkgInfo.packageName,
+                                appName = appName,
+                                icon = icon,
+                                hasBootPermission = hasBootPerm,
+                                bootReceiverCount = bootComponents.size,
+                                bootReceiverComponents = bootComponents,
+                                isCut = isCut,
+                                isSystemApp = isSystem
+                            )
+                        )
+                    }
+                }
+
+                // Sort: Managed apps first, then non-system user apps, then system apps, then by name
+                list.sortWith(
+                    compareByDescending<com.example.detector.BootReceiverItem> { managedPkgs.contains(it.packageName) }
+                        .thenBy { it.isSystemApp }
+                        .thenBy { it.appName.lowercase() }
+                )
+                _bootReceiverApps.value = list
+            } catch (e: Exception) {
+                // Ignore
+            } finally {
+                _isLoadingBootReceivers.value = false
+            }
+        }
+    }
+
+    fun cutBootReceiversForPackages(packages: List<String>, cut: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val isRoot = preferences.mode == OperatingMode.ROOT
+            for (pkg in packages) {
+                preferences.setBootCutForPackage(pkg, cut)
+                if (isRoot) {
+                    val item = _bootReceiverApps.value.find { it.packageName == pkg }
+                    if (item != null && item.bootReceiverComponents.isNotEmpty()) {
+                        for (comp in item.bootReceiverComponents) {
+                            if (cut) {
+                                RootExecutor.executeCommand("pm disable $comp")
+                            } else {
+                                RootExecutor.executeCommand("pm enable $comp")
+                            }
+                        }
+                    }
+                    if (cut) {
+                        RootExecutor.executeCommand("cmd appops set $pkg BOOT_COMPLETED ignore")
+                    } else {
+                        RootExecutor.executeCommand("cmd appops set $pkg BOOT_COMPLETED allow")
+                    }
+                }
+            }
+            val pkgSet = packages.toSet()
+            _bootReceiverApps.value = _bootReceiverApps.value.map {
+                if (pkgSet.contains(it.packageName)) it.copy(isCut = cut) else it
+            }
+            _statusMessage.value = if (cut) {
+                "Cut boot receivers for ${packages.size} app(s)"
+            } else {
+                "Restored boot receivers for ${packages.size} app(s)"
+            }
+        }
+    }
+
+    fun cutAllBootReceivers() {
+        val targets = _bootReceiverApps.value.filter { !it.isCut }.map { it.packageName }
+        if (targets.isNotEmpty()) {
+            cutBootReceiversForPackages(targets, cut = true)
         }
     }
 

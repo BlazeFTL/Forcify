@@ -107,7 +107,7 @@ object RootExecutor {
         val map = mutableMapOf<String, RootProcessState>()
         try {
             // Fast combined root query: ps + grep for foreground services and top app in ONE call (< 60ms)
-            val cmd = "ps -A -o PID,NAME; echo '===FGS==='; dumpsys activity services | grep -E 'ServiceRecord\\{.*u0|isForeground=true'; echo '===TOP==='; cmd activity get-top-package"
+            val cmd = "ps -A -o PID,NAME; echo '===FGS==='; dumpsys activity services | grep 'isForeground=true' -B 2; echo '===TOP==='; dumpsys activity activities | grep 'mResumedActivity'"
             val res = executeCommand(cmd)
             if (res.isSuccess) {
                 val output = res.getOrNull() ?: ""
@@ -141,17 +141,19 @@ object RootExecutor {
                             }
                         }
                         1 -> {
-                            if (trimmed.contains("ServiceRecord{")) {
+                            if (trimmed.contains("ServiceRecord{") || trimmed.contains("u0 ")) {
                                 val match = Regex("u0\\s+([a-zA-Z0-9._]+)/").find(trimmed)
                                 lastServicePkg = match?.groupValues?.get(1)
-                            } else if (trimmed.contains("isForeground=true") && lastServicePkg != null) {
+                            }
+                            if (trimmed.contains("isForeground=true") && lastServicePkg != null) {
                                 val existing = map[lastServicePkg] ?: RootProcessState(isRunning = true)
                                 map[lastServicePkg] = existing.copy(isForegroundService = true)
                             }
                         }
                         2 -> {
-                            val topPkg = trimmed.takeWhile { it != '/' && !it.isWhitespace() }
-                            if (topPkg.isNotEmpty() && !topPkg.contains("launcher") && !topPkg.contains("forcify")) {
+                            val match = Regex("u0\\s+([a-zA-Z0-9._]+)/").find(trimmed)
+                            val topPkg = match?.groupValues?.get(1)
+                            if (!topPkg.isNullOrEmpty() && !topPkg.contains("launcher") && !topPkg.contains("forcify")) {
                                 val existing = map[topPkg] ?: RootProcessState(isRunning = true)
                                 map[topPkg] = existing.copy(isTop = true)
                             }
