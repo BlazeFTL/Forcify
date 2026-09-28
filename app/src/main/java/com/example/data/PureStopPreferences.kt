@@ -34,6 +34,10 @@ class PureStopPreferences(context: Context) {
         get() = prefs.getBoolean("auto_cut_wakeups", true)
         set(value) = prefs.edit().putBoolean("auto_cut_wakeups", value).apply()
 
+    var autoHibernateAfterScreenOff: Boolean
+        get() = prefs.getBoolean("auto_hibernate_screen_off", true)
+        set(value) = prefs.edit().putBoolean("auto_hibernate_screen_off", value).apply()
+
     var aggressiveEvadingDetection: Boolean
         get() = prefs.getBoolean("aggressive_evading_detection", true)
         set(value) = prefs.edit().putBoolean("aggressive_evading_detection", value).apply()

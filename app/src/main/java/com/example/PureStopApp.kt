@@ -16,6 +16,7 @@ class PureStopApp : Application() {
         instance = this
         database = AppDatabase.getDatabase(this)
         preferences = PureStopPreferences(this)
+        com.example.service.ForCifyDaemonService.start(this)
     }
 
     companion object {

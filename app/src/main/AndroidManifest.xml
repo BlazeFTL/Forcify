@@ -44,6 +44,11 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
         </service>
+
+        <service
+            android:name=".service.ForCifyDaemonService"
+            android:enabled="true"
+            android:exported="false" />
     </application>
 
 </manifest>

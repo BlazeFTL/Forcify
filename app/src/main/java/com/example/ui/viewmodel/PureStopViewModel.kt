@@ -116,12 +116,15 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
         val savedPkgs = preferences.savedManagedPackages
         if (savedPkgs.isEmpty()) return emptyList()
 
+        val app = getApplication<Application>()
+        AppIconCache.preloadFromDisk(app, savedPkgs)
+
         val savedPendingPkgs = preferences.savedPendingPackages
         val list = mutableListOf<InstalledAppItem>()
 
         for (pkg in savedPkgs) {
             val appName = preferences.getSavedAppName(pkg) ?: pkg
-            val icon = AppIconCache.get(pkg)
+            val icon = AppIconCache.get(pkg) ?: AppIconCache.getOrLoad(app, pkg)
             val isPending = savedPendingPkgs.contains(pkg) || savedPendingPkgs.isEmpty()
             val isRestricted = preferences.isRestrictRunningAsForeground(pkg)
             val isWorkingIgnored = preferences.isWorkingStateIgnored(pkg)
@@ -428,7 +431,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                         val appInfo = pm.getApplicationInfo(entity.packageName, 0)
                         val appName = pm.getApplicationLabel(appInfo).toString()
                         preferences.setSavedAppName(entity.packageName, appName)
-                        val icon = AppIconCache.getOrLoad(pm, appInfo)
+                        val icon = AppIconCache.getOrLoad(getApplication(), appInfo)
 
                         val rootState = rootProcessMap[entity.packageName]
                         val runningProc = runningMap[entity.packageName]
