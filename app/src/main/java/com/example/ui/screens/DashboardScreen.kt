@@ -907,22 +907,19 @@ private fun GreenifyStyleAppCard(
                     )
                 }
 
-                val hasRestrictedForeground = app.secondaryDetail.contains("Restricted running as foreground", ignoreCase = true)
-                val hasRecentTask = app.secondaryDetail.contains("In recent tasks", ignoreCase = true)
-                val displaySecondary = if (hasRestrictedForeground) {
-                    "Restricted running as foreground"
-                } else if (hasRecentTask && !isWillHibernateSoon) {
-                    "In recent tasks"
-                } else ""
-
-                if (displaySecondary.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(1.dp))
-                    Text(
-                        text = displaySecondary,
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1
-                    )
+                if (app.secondaryDetail.isNotBlank()) {
+                    for (line in app.secondaryDetail.lines()) {
+                        val trimmed = line.trim()
+                        if (trimmed.isNotBlank() && trimmed != "Will hibernate after screen off" && trimmed != "Pending Hibernation") {
+                            Spacer(modifier = Modifier.height(1.dp))
+                            Text(
+                                text = trimmed,
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                        }
+                    }
                 }
 
                 // Working State Protection / Ignored Status Display

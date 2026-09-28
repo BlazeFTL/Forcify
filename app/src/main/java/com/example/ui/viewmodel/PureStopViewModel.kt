@@ -118,11 +118,12 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
     // In-memory set of package names stopped during the session to guarantee they stay hibernated
     private val _manuallyStoppedPackages = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
-    // 1. Not Hibernating Automatically (Foreground, Evading Restrictions, Active Working State)
+    // 1. Not Hibernating Automatically (Foreground, Evading Restrictions, Active Working State unless ignored)
     val notHibernatingApps: StateFlow<List<InstalledAppItem>> = allManagedApps.map { list ->
         list.filter {
             !it.isStoppedState &&
             it.state != AppState.BACKGROUND_FREE &&
+            !it.ignoreWorkingState &&
             (it.state == AppState.FOREGROUND ||
              it.state == AppState.EVADING_RESTRICTIONS ||
              it.state == AppState.WORKING_STATE)
@@ -134,9 +135,11 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
         list.filter {
             !it.isStoppedState &&
             it.state != AppState.BACKGROUND_FREE &&
-            it.state != AppState.FOREGROUND &&
-            it.state != AppState.EVADING_RESTRICTIONS &&
-            it.state != AppState.WORKING_STATE
+            (it.ignoreWorkingState || (
+                it.state != AppState.FOREGROUND &&
+                it.state != AppState.EVADING_RESTRICTIONS &&
+                it.state != AppState.WORKING_STATE
+            ))
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -182,41 +185,47 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
 
     init {
         checkPermissions()
-        // Instant synchronous pre-population from cached packages (< 5ms, 0 delay, 0 spinner!)
-        val savedPkgs = preferences.savedManagedPackages
-        val savedPendingPkgs = preferences.savedPendingPackages
-        if (savedPkgs.isNotEmpty()) {
-            val pm = getApplication<Application>().packageManager
-            val initialList = mutableListOf<InstalledAppItem>()
-            for (pkg in savedPkgs) {
-                try {
-                    val appInfo = pm.getApplicationInfo(pkg, 0)
-                    val appName = pm.getApplicationLabel(appInfo).toString()
-                    val icon = try { pm.getApplicationIcon(appInfo) } catch (e: Exception) { null }
-                    val isFlagStopped = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_STOPPED) != 0
-                    val (isUnsafe, unsafeReason) = detector.checkUnsafeToForceStop(pkg, appName)
-                    val isPending = savedPendingPkgs.contains(pkg) || (!isFlagStopped && savedPendingPkgs.isEmpty())
-                    initialList.add(
-                        InstalledAppItem(
-                            packageName = pkg,
-                            appName = appName,
-                            icon = icon,
-                            state = if (isPending) AppState.CACHED else AppState.BACKGROUND_FREE,
-                            stateDetail = if (isPending) "Pending Hibernation" else "Hibernated",
-                            secondaryDetail = "",
-                            isManaged = true,
-                            isStoppedState = !isPending,
-                            isUnsafeToForceStop = isUnsafe,
-                            unsafeReason = unsafeReason
+
+        // Background pre-population on IO thread: main thread returns in 0ms, dismissing splash screen instantly!
+        viewModelScope.launch(Dispatchers.IO) {
+            val savedPkgs = preferences.savedManagedPackages
+            val savedPendingPkgs = preferences.savedPendingPackages
+            if (savedPkgs.isNotEmpty()) {
+                val pm = getApplication<Application>().packageManager
+                val initialList = mutableListOf<InstalledAppItem>()
+                for (pkg in savedPkgs) {
+                    try {
+                        val appInfo = pm.getApplicationInfo(pkg, 0)
+                        val appName = pm.getApplicationLabel(appInfo).toString()
+                        val icon = try { pm.getApplicationIcon(appInfo) } catch (e: Exception) { null }
+                        val isFlagStopped = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_STOPPED) != 0
+                        val (isUnsafe, unsafeReason) = detector.checkUnsafeToForceStop(pkg, appName)
+                        val isPending = savedPendingPkgs.contains(pkg) || (!isFlagStopped && savedPendingPkgs.isEmpty())
+                        initialList.add(
+                            InstalledAppItem(
+                                packageName = pkg,
+                                appName = appName,
+                                icon = icon,
+                                state = if (isPending) AppState.CACHED else AppState.BACKGROUND_FREE,
+                                stateDetail = if (isPending) "Pending Hibernation" else "Hibernated",
+                                secondaryDetail = "",
+                                isManaged = true,
+                                isStoppedState = !isPending,
+                                isUnsafeToForceStop = isUnsafe,
+                                unsafeReason = unsafeReason
+                            )
                         )
-                    )
-                } catch (e: Exception) {
-                    // Ignored
+                    } catch (e: Exception) {
+                        // Ignored
+                    }
+                }
+                if (initialList.isNotEmpty()) {
+                    _managedAppsFlow.value = initialList
                 }
             }
-            if (initialList.isNotEmpty()) {
-                _managedAppsFlow.value = initialList
-            }
+
+            // Proactively build installed apps catalog on startup so user has zero wait time on Add Apps
+            loadInstalledAppsForAddDialog()
         }
 
         viewModelScope.launch {
@@ -432,20 +441,33 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
 
                             val (isUnsafe, unsafeReason) = detector.checkUnsafeToForceStop(entity.packageName, appName)
 
+                            val isWorkingIgnored = preferences.isWorkingStateIgnored(entity.packageName)
+                            val isDownloaderOrMedia = detector.isDownloaderOrMediaApp(entity.packageName)
+
                             val (state, stateDetail, secondaryDetail) = if (isStoppedState) {
                                 Triple(AppState.BACKGROUND_FREE, "Hibernated", "")
                             } else if (rootState?.isTop == true || (runningProc?.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND)) {
-                                Triple(AppState.FOREGROUND, "Foreground", "Active on screen")
+                                val sub = mutableListOf<String>()
+                                if (isWorkingIgnored) sub.add("Ignored running state")
+                                if (isIgnoredBattery) sub.add("Restricted running as foreground")
+                                Triple(AppState.FOREGROUND, "Foreground", sub.joinToString("\n"))
                             } else if (rootState?.isForegroundService == true || runningProc?.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE) {
-                                Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
+                                if (isDownloaderOrMedia && !isWorkingIgnored) {
+                                    Triple(AppState.WORKING_STATE, "Active Task (Downloading / Media)", "Protected ongoing task")
+                                } else {
+                                    Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
+                                }
                             } else if (isRunning) {
-                                val secondary = if (isIgnoredBattery) "Restricted running as foreground" else ""
-                                Triple(AppState.BACKGROUND_RUNNING, "Running in background", secondary)
+                                val sub = mutableListOf<String>()
+                                if (isWorkingIgnored) sub.add("Ignored running state")
+                                if (isIgnoredBattery) sub.add("Restricted running as foreground")
+                                Triple(AppState.BACKGROUND_RUNNING, "Running in background", sub.joinToString("\n"))
                             } else {
-                                Triple(AppState.CACHED, "Pending Hibernation", "Will hibernate after screen off")
+                                val sub = mutableListOf<String>()
+                                if (isWorkingIgnored) sub.add("Ignored running state")
+                                if (isIgnoredBattery) sub.add("Restricted running as foreground")
+                                Triple(AppState.CACHED, "Pending Hibernation", sub.joinToString("\n"))
                             }
-
-                            val isWorkingIgnored = preferences.isWorkingStateIgnored(entity.packageName)
 
                             resultList.add(
                                 InstalledAppItem(

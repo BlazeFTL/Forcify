@@ -83,7 +83,7 @@ object RootExecutor {
             }
             val exitCode = process.waitFor()
 
-            if (exitCode == 0) {
+            if (exitCode == 0 || output.isNotEmpty()) {
                 Result.success(output.toString().trim())
             } else {
                 Result.failure(Exception("Command failed ($exitCode): $errors"))
@@ -106,18 +106,18 @@ object RootExecutor {
     suspend fun queryRootProcessStates(): Map<String, RootProcessState> = withContext(Dispatchers.IO) {
         val map = mutableMapOf<String, RootProcessState>()
         try {
-            // Fast combined root query: ps + grep for foreground services and top app in ONE call (< 60ms)
-            val cmd = "ps -A -o PID,NAME; echo '===FGS==='; dumpsys activity services | grep 'isForeground=true' -B 2; echo '===TOP==='; dumpsys activity activities | grep 'mResumedActivity'"
+            // Combined fast root query for processes, foreground services, and top package
+            val cmd = "ps -A -o PID,NAME; echo '===SERVICES==='; dumpsys activity services | grep -E 'ServiceRecord|isForeground='; echo '===TOP==='; dumpsys activity activities | grep 'mResumedActivity'; exit 0"
             val res = executeCommand(cmd)
-            if (res.isSuccess) {
-                val output = res.getOrNull() ?: ""
-                var section = 0 // 0 = ps, 1 = fgs, 2 = top
+            val output = res.getOrNull() ?: ""
+            if (output.isNotEmpty()) {
+                var section = 0 // 0 = ps, 1 = services, 2 = top
                 var lastServicePkg: String? = null
 
                 for (line in output.lines()) {
                     val trimmed = line.trim()
                     if (trimmed.isEmpty()) continue
-                    if (trimmed == "===FGS===") {
+                    if (trimmed == "===SERVICES===") {
                         section = 1
                         continue
                     }
@@ -143,11 +143,13 @@ object RootExecutor {
                         1 -> {
                             if (trimmed.contains("ServiceRecord{") || trimmed.contains("u0 ")) {
                                 val match = Regex("u0\\s+([a-zA-Z0-9._]+)/").find(trimmed)
-                                lastServicePkg = match?.groupValues?.get(1)
+                                if (match != null) {
+                                    lastServicePkg = match.groupValues[1]
+                                }
                             }
                             if (trimmed.contains("isForeground=true") && lastServicePkg != null) {
                                 val existing = map[lastServicePkg] ?: RootProcessState(isRunning = true)
-                                map[lastServicePkg] = existing.copy(isForegroundService = true)
+                                map[lastServicePkg] = existing.copy(isRunning = true, isForegroundService = true)
                             }
                         }
                         2 -> {
@@ -155,7 +157,7 @@ object RootExecutor {
                             val topPkg = match?.groupValues?.get(1)
                             if (!topPkg.isNullOrEmpty() && !topPkg.contains("launcher") && !topPkg.contains("forcify")) {
                                 val existing = map[topPkg] ?: RootProcessState(isRunning = true)
-                                map[topPkg] = existing.copy(isTop = true)
+                                map[topPkg] = existing.copy(isRunning = true, isTop = true)
                             }
                         }
                     }

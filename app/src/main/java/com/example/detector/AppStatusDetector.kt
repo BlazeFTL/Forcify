@@ -367,7 +367,7 @@ class AppStatusDetector(private val context: Context) {
         return Pair(false, "")
     }
 
-    private fun isDownloaderOrMediaApp(packageName: String): Boolean {
+    fun isDownloaderOrMediaApp(packageName: String): Boolean {
         val pkg = packageName.lowercase()
         return pkg.contains("idm") ||
             pkg.contains("download") ||
