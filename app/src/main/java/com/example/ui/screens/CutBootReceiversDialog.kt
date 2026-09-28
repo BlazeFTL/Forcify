@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.PowerOff
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -37,6 +38,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -91,23 +93,35 @@ fun CutBootReceiversDialog(
 
     val cutCount = bootApps.count { it.isCut }
     val totalCount = bootApps.size
+    var currentFilter by remember { mutableStateOf("ALL") } // ALL, CUT, ACTIVE
+
+    val displayedApps = remember(filteredApps, currentFilter) {
+        when (currentFilter) {
+            "CUT" -> filteredApps.filter { it.isCut }
+            "ACTIVE" -> filteredApps.filter { !it.isCut }
+            else -> filteredApps
+        }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        dragHandle = null,
-        modifier = Modifier.fillMaxHeight(0.92f)
+        dragHandle = {
+            BottomSheetDefaults.DragHandle()
+        },
+        containerColor = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
     ) {
         Column(
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
                 .navigationBarsPadding()
         ) {
             // Header
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 16.dp),
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
@@ -183,7 +197,7 @@ fun CutBootReceiversDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
             ) {
                 OutlinedTextField(
                     value = searchQuery,
@@ -210,48 +224,104 @@ fun CutBootReceiversDialog(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                // Filter chips: All, Cut / Blocked, Active
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = currentFilter == "ALL",
+                        onClick = { currentFilter = "ALL" },
+                        label = { Text("All (${filteredApps.size})", fontSize = 12.sp) },
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    FilterChip(
+                        selected = currentFilter == "CUT",
+                        onClick = { currentFilter = "CUT" },
+                        label = { Text("Cut / Blocked ($cutCount)", fontSize = 12.sp) },
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    FilterChip(
+                        selected = currentFilter == "ACTIVE",
+                        onClick = { currentFilter = "ACTIVE" },
+                        label = { Text("Active (${totalCount - cutCount})", fontSize = 12.sp) },
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(
-                        onClick = {
-                            selectedPackages = if (selectedPackages.size == filteredApps.size) {
-                                emptySet()
-                            } else {
-                                filteredApps.map { it.packageName }.toSet()
+                    val allSelected = selectedPackages.isNotEmpty() && selectedPackages.size == displayedApps.size
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable {
+                                selectedPackages = if (allSelected) {
+                                    emptySet()
+                                } else {
+                                    displayedApps.map { it.packageName }.toSet()
+                                }
                             }
-                        }
+                            .padding(vertical = 4.dp, horizontal = 2.dp)
                     ) {
-                        Text(
-                            text = if (selectedPackages.size == filteredApps.size && filteredApps.isNotEmpty()) {
-                                "Deselect All"
-                            } else {
-                                "Select All (${filteredApps.size})"
+                        Checkbox(
+                            checked = allSelected,
+                            onCheckedChange = { checked ->
+                                selectedPackages = if (checked) {
+                                    displayedApps.map { it.packageName }.toSet()
+                                } else {
+                                    emptySet()
+                                }
                             },
+                            colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (allSelected) "Deselect All" else "Select All (${displayedApps.size})",
                             fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                     }
 
-                    Button(
-                        onClick = {
-                            viewModel.cutAllBootReceivers()
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary
-                        ),
-                        shape = RoundedCornerShape(10.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ContentCut,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Cut All (${bootApps.count { !it.isCut }})", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (cutCount > 0) {
+                            OutlinedButton(
+                                onClick = {
+                                    val cutPkgs = bootApps.filter { it.isCut }.map { it.packageName }
+                                    viewModel.cutBootReceiversForPackages(cutPkgs, cut = false)
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Text("Restore All ($cutCount)", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                viewModel.cutAllBootReceivers()
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ContentCut,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Cut All (${bootApps.count { !it.isCut }})", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
@@ -287,7 +357,7 @@ fun CutBootReceiversDialog(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(filteredApps, key = { it.packageName }) { app ->
+                    items(displayedApps, key = { it.packageName }) { app ->
                         val isSelected = selectedPackages.contains(app.packageName)
                         BootReceiverAppCard(
                             app = app,
@@ -363,14 +433,14 @@ private fun BootReceiverAppCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .border(
-                width = if (isSelected) 2.dp else 1.dp,
-                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
                 shape = RoundedCornerShape(12.dp)
             )
             .clickable { onToggleSelect() },
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected)
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)
             else
                 MaterialTheme.colorScheme.surface
         ),

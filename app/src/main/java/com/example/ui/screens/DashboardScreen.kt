@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -122,6 +123,7 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
     val selectedAppForWakeup by viewModel.selectedAppForWakeup.collectAsState()
     val batchProgress by viewModel.batchProgress.collectAsState()
     val statusMessage by viewModel.statusMessage.collectAsState()
+    val showWakeUpManagerDialog by viewModel.showWakeUpManagerDialog.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
     var showMenu by remember { mutableStateOf(false) }
@@ -329,63 +331,71 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                             }
                         }
 
-                        // Three-dot menu: Contains Refresh, Cut All Wakeups, Switch Mode, Re-run Setup
+                        // Three-dot menu: Styled to match app's clean card design
                         Box {
                             IconButton(onClick = { showMenu = true }) {
                                 Icon(imageVector = Icons.Default.MoreVert, contentDescription = "Options")
                             }
                             DropdownMenu(
                                 expanded = showMenu,
-                                onDismissRequest = { showMenu = false }
+                                onDismissRequest = { showMenu = false },
+                                modifier = Modifier
+                                    .widthIn(min = 220.dp)
+                                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(16.dp)),
+                                shape = RoundedCornerShape(16.dp),
+                                containerColor = Color.White,
+                                tonalElevation = 6.dp,
+                                shadowElevation = 10.dp
                             ) {
                                 DropdownMenuItem(
-                                    text = { Text("Refresh Status") },
+                                    text = { Text("Refresh Status", fontWeight = FontWeight.Medium) },
                                     onClick = {
                                         showMenu = false
                                         viewModel.refreshApps()
                                     },
                                     leadingIcon = {
-                                        Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
+                                        Icon(imageVector = Icons.Default.Refresh, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                     }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Cut All Wakeups") },
+                                    text = { Text("Cut Wakeups / Paths", fontWeight = FontWeight.Medium) },
                                     onClick = {
                                         showMenu = false
-                                        viewModel.cutAllActiveWakeups()
+                                        viewModel.openWakeUpManager()
                                     },
                                     leadingIcon = {
-                                        Icon(imageVector = Icons.Default.ContentCut, contentDescription = null)
+                                        Icon(imageVector = Icons.Default.ContentCut, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                     }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Cut Boot Receivers") },
+                                    text = { Text("Cut Boot Receivers", fontWeight = FontWeight.Medium) },
                                     onClick = {
                                         showMenu = false
                                         viewModel.openCutBootDialog()
                                     },
                                     leadingIcon = {
-                                        Icon(imageVector = Icons.Default.PowerOff, contentDescription = null)
+                                        Icon(imageVector = Icons.Default.PowerOff, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                     }
                                 )
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                                 DropdownMenuItem(
-                                    text = { Text("Switch Operating Mode") },
+                                    text = { Text("Switch Operating Mode", fontWeight = FontWeight.Medium) },
                                     onClick = {
                                         showMenu = false
                                         showModeDialog = true
                                     },
                                     leadingIcon = {
-                                        Icon(imageVector = Icons.Default.Bolt, contentDescription = null)
+                                        Icon(imageVector = Icons.Default.Bolt, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                     }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Re-run Setup Wizard") },
+                                    text = { Text("Re-run Setup Wizard", fontWeight = FontWeight.Medium) },
                                     onClick = {
                                         showMenu = false
                                         viewModel.resetSetup()
                                     },
                                     leadingIcon = {
-                                        Icon(imageVector = Icons.Default.Settings, contentDescription = null)
+                                        Icon(imageVector = Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
                                 )
                             }
@@ -452,7 +462,14 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
 
                             DropdownMenu(
                                 expanded = showSelectionOverflow,
-                                onDismissRequest = { showSelectionOverflow = false }
+                                onDismissRequest = { showSelectionOverflow = false },
+                                modifier = Modifier
+                                    .widthIn(min = 230.dp)
+                                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(16.dp)),
+                                shape = RoundedCornerShape(16.dp),
+                                containerColor = Color.White,
+                                tonalElevation = 6.dp,
+                                shadowElevation = 10.dp
                             ) {
                                 if (selectedApps.size == 1 && singleSelected != null) {
                                     DropdownMenuItem(
@@ -881,6 +898,14 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
         CutBootReceiversDialog(
             viewModel = viewModel,
             onDismiss = { viewModel.closeCutBootDialog() }
+        )
+    }
+
+    // Wake-Up Paths Manager Dialog (App list with selection, path choices, and re-attach)
+    if (showWakeUpManagerDialog) {
+        WakeUpPathsManagerDialog(
+            viewModel = viewModel,
+            onDismiss = { viewModel.closeWakeUpManager() }
         )
     }
 

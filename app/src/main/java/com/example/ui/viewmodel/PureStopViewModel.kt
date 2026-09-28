@@ -986,6 +986,47 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    private val _showWakeUpManagerDialog = MutableStateFlow(false)
+    val showWakeUpManagerDialog: StateFlow<Boolean> = _showWakeUpManagerDialog.asStateFlow()
+
+    fun openWakeUpManager() {
+        _showWakeUpManagerDialog.value = true
+    }
+
+    fun closeWakeUpManager() {
+        _showWakeUpManagerDialog.value = false
+    }
+
+    fun cutWakeUpPathsForPackages(packages: List<String>, safeOnly: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val apps = allManagedApps.value.filter { packages.contains(it.packageName) }
+            for (app in apps) {
+                if (safeOnly) {
+                    cutSafeWakeUpPaths(app)
+                } else {
+                    cutAllWakeUpPaths(app)
+                }
+            }
+            _statusMessage.value = if (safeOnly) {
+                "Cut safe wake-up paths for ${apps.size} app(s)"
+            } else {
+                "Cut all wake-up paths for ${apps.size} app(s)"
+            }
+            refreshManagedAppsOnly(silent = true)
+        }
+    }
+
+    fun restoreWakeUpPathsForPackages(packages: List<String>) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val apps = allManagedApps.value.filter { packages.contains(it.packageName) }
+            for (app in apps) {
+                restoreAllWakeUpPaths(app)
+            }
+            _statusMessage.value = "Restored / Re-attached wake-up paths for ${apps.size} app(s)"
+            refreshManagedAppsOnly(silent = true)
+        }
+    }
+
     fun cutAllActiveWakeups() {
         viewModelScope.launch {
             val candidates = allManagedApps.value.filter {
