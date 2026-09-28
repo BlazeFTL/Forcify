@@ -442,14 +442,16 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                             val (isUnsafe, unsafeReason) = detector.checkUnsafeToForceStop(entity.packageName, appName)
 
                             val isWorkingIgnored = preferences.isWorkingStateIgnored(entity.packageName)
+                            val isRestrictedForeground = preferences.isRestrictRunningAsForeground(entity.packageName)
                             val isDownloaderOrMedia = detector.isDownloaderOrMediaApp(entity.packageName)
+                            val showRestrictedForeground = isRestrictedForeground || isIgnoredBattery
 
                             val (state, stateDetail, secondaryDetail) = if (isStoppedState) {
                                 Triple(AppState.BACKGROUND_FREE, "Hibernated", "")
                             } else if (rootState?.isTop == true || (runningProc?.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND)) {
                                 val sub = mutableListOf<String>()
                                 if (isWorkingIgnored) sub.add("Ignored running state")
-                                if (isIgnoredBattery) sub.add("Restricted running as foreground")
+                                if (showRestrictedForeground) sub.add("Restricted running as foreground")
                                 Triple(AppState.FOREGROUND, "Foreground", sub.joinToString("\n"))
                             } else if (rootState?.isForegroundService == true || runningProc?.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE) {
                                 if (isDownloaderOrMedia && !isWorkingIgnored) {
@@ -460,12 +462,12 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                             } else if (isRunning) {
                                 val sub = mutableListOf<String>()
                                 if (isWorkingIgnored) sub.add("Ignored running state")
-                                if (isIgnoredBattery) sub.add("Restricted running as foreground")
+                                if (showRestrictedForeground) sub.add("Restricted running as foreground")
                                 Triple(AppState.BACKGROUND_RUNNING, "Running in background", sub.joinToString("\n"))
                             } else {
                                 val sub = mutableListOf<String>()
                                 if (isWorkingIgnored) sub.add("Ignored running state")
-                                if (isIgnoredBattery) sub.add("Restricted running as foreground")
+                                if (showRestrictedForeground) sub.add("Restricted running as foreground")
                                 Triple(AppState.CACHED, "Pending Hibernation", sub.joinToString("\n"))
                             }
 
@@ -484,6 +486,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                                     lastFrozenTimestamp = entity.lastFrozenTimestamp,
                                     freezeCount = entity.freezeCount,
                                     ignoreWorkingState = isWorkingIgnored,
+                                    isRestrictedForeground = showRestrictedForeground,
                                     isStoppedState = (state == AppState.BACKGROUND_FREE),
                                     isUnsafeToForceStop = isUnsafe,
                                     unsafeReason = unsafeReason
@@ -812,9 +815,47 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
             if (it.packageName == app.packageName) it.copy(ignoreWorkingState = isNowIgnored) else it
         }
         _statusMessage.value = if (isNowIgnored) {
-            "${app.appName}: Working state ignored (will force stop in batch)"
+            "${app.appName}: Working state ignored (will hibernate after screen off)"
         } else {
-            "${app.appName}: Working state protected (skipped in batch)"
+            "${app.appName}: Working state protected"
+        }
+        refreshManagedAppsOnly(silent = true)
+    }
+
+    fun toggleRestrictRunningAsForeground(app: InstalledAppItem) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val isNowRestricted = preferences.toggleRestrictRunningAsForeground(app.packageName)
+            if (preferences.mode == OperatingMode.ROOT) {
+                if (isNowRestricted) {
+                    RootExecutor.executeCommand("cmd appops set ${app.packageName} START_FOREGROUND ignore; cmd appops set ${app.packageName} RUN_IN_BACKGROUND ignore; cmd appops set ${app.packageName} RUN_ANY_IN_BACKGROUND ignore")
+                } else {
+                    RootExecutor.executeCommand("cmd appops set ${app.packageName} START_FOREGROUND allow; cmd appops set ${app.packageName} RUN_IN_BACKGROUND allow; cmd appops set ${app.packageName} RUN_ANY_IN_BACKGROUND allow")
+                }
+            }
+            _managedAppsFlow.value = _managedAppsFlow.value.map {
+                if (it.packageName == app.packageName) it.copy(isRestrictedForeground = isNowRestricted) else it
+            }
+            _statusMessage.value = if (isNowRestricted) {
+                "${app.appName}: Restricted running as foreground"
+            } else {
+                "${app.appName}: Allowed running as foreground"
+            }
+            refreshManagedAppsOnly(silent = true)
+        }
+    }
+
+    fun launchApp(packageName: String) {
+        try {
+            val pm = getApplication<Application>().packageManager
+            val intent = pm.getLaunchIntentForPackage(packageName)
+            if (intent != null) {
+                intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                getApplication<Application>().startActivity(intent)
+            } else {
+                _statusMessage.value = "Cannot launch app: no main activity found"
+            }
+        } catch (e: Exception) {
+            _statusMessage.value = "Failed to launch app: ${e.message}"
         }
     }
 

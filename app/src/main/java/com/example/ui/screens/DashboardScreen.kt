@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PowerOff
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Refresh
@@ -56,6 +57,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FloatingActionButtonDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -66,6 +68,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -394,39 +397,152 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                 )
             }
         },
-        // THE BOTTOM RIGHT FORCE STOP BUTTON WITH MULTI-SELECT SUPPORT!
-        floatingActionButton = {
+        bottomBar = {
             if (isMultiSelectMode) {
-                ExtendedFloatingActionButton(
-                    onClick = {
-                        val selectedApps = pendingApps.filter { selectedPackagesForBatchStop.contains(it.packageName) }
-                        viewModel.forceStopSelected(selectedApps)
-                        selectedPackagesForBatchStop = emptySet()
-                    },
-                    containerColor = MaterialTheme.colorScheme.primary,
+                val selectedApps = allManagedApps.filter { selectedPackagesForBatchStop.contains(it.packageName) }
+                val singleSelected = selectedApps.firstOrNull()
+                var showSelectionOverflow by remember { mutableStateOf(false) }
+
+                Surface(
+                    color = MaterialTheme.colorScheme.primary,
                     contentColor = Color.White,
-                    elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier
-                        .testTag("force_stop_selected_fab")
-                        .navigationBarsPadding()
-                        .padding(bottom = 12.dp, end = 8.dp),
-                    icon = {
-                        Icon(
-                            imageVector = Icons.Default.PowerSettingsNew,
-                            contentDescription = "Force Stop Selected",
-                            modifier = Modifier.size(22.dp)
-                        )
-                    },
-                    text = {
+                    shadowElevation = 8.dp,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
                         Text(
-                            text = "Force Stop Selected (${selectedPackagesForBatchStop.size})",
+                            text = if (selectedApps.size == 1) singleSelected?.appName ?: "" else "${selectedApps.size} Selected",
+                            fontSize = 17.sp,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp
+                            color = Color.White,
+                            modifier = Modifier.weight(1f)
                         )
+
+                        // Force Stop / Hibernate Button
+                        IconButton(
+                            onClick = {
+                                viewModel.forceStopSelected(selectedApps)
+                                selectedPackagesForBatchStop = emptySet()
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PowerSettingsNew,
+                                contentDescription = "Force Stop",
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+
+                        // Selection Options Overflow Menu
+                        Box {
+                            IconButton(onClick = { showSelectionOverflow = true }) {
+                                Icon(
+                                    imageVector = Icons.Default.MoreVert,
+                                    contentDescription = "Options",
+                                    tint = Color.White
+                                )
+                            }
+
+                            DropdownMenu(
+                                expanded = showSelectionOverflow,
+                                onDismissRequest = { showSelectionOverflow = false }
+                            ) {
+                                if (selectedApps.size == 1 && singleSelected != null) {
+                                    DropdownMenuItem(
+                                        text = { Text("Run") },
+                                        onClick = {
+                                            showSelectionOverflow = false
+                                            viewModel.launchApp(singleSelected.packageName)
+                                        },
+                                        leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) }
+                                    )
+                                }
+
+                                DropdownMenuItem(
+                                    text = { Text("Degreenify selected app") },
+                                    onClick = {
+                                        showSelectionOverflow = false
+                                        selectedApps.forEach { viewModel.removeAppFromFreezeList(it.packageName) }
+                                        selectedPackagesForBatchStop = emptySet()
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) }
+                                )
+
+                                if (selectedApps.size == 1 && singleSelected != null) {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text("Restrict running as foreground")
+                                                Checkbox(
+                                                    checked = singleSelected.isRestrictedForeground,
+                                                    onCheckedChange = null,
+                                                    colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary)
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            viewModel.toggleRestrictRunningAsForeground(singleSelected)
+                                        }
+                                    )
+
+                                    HorizontalDivider()
+
+                                    Text(
+                                        text = "HIBERNATION SETTINGS",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                    )
+
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text("Ignore working state")
+                                                Checkbox(
+                                                    checked = singleSelected.ignoreWorkingState,
+                                                    onCheckedChange = null,
+                                                    colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary)
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            viewModel.toggleIgnoreWorkingState(singleSelected)
+                                        }
+                                    )
+
+                                    DropdownMenuItem(
+                                        text = { Text("Inspect Wake-Ups") },
+                                        onClick = {
+                                            showSelectionOverflow = false
+                                            viewModel.selectAppForWakeup(singleSelected)
+                                        },
+                                        leadingIcon = { Icon(Icons.Default.Bolt, contentDescription = null) }
+                                    )
+                                }
+                            }
+                        }
                     }
-                )
-            } else {
+                }
+            }
+        },
+        floatingActionButton = {
+            if (!isMultiSelectMode) {
                 val hasStoppable = stoppableCount > 0
                 ExtendedFloatingActionButton(
                     onClick = { viewModel.forceStopAllRunning() },
@@ -604,6 +720,8 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                                     selectedPackagesForBatchStop = selectedPackagesForBatchStop + app.packageName
                                 },
                                 onForceStop = { viewModel.forceStopSingle(app) },
+                                onRun = { viewModel.launchApp(app.packageName) },
+                                onToggleRestrictForeground = { viewModel.toggleRestrictRunningAsForeground(app) },
                                 onOpenWakeup = { viewModel.selectAppForWakeup(app) },
                                 onRemove = { viewModel.removeAppFromFreezeList(app.packageName) },
                                 onToggleIgnoreWorking = { viewModel.toggleIgnoreWorkingState(app) }
@@ -653,6 +771,8 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                                     selectedPackagesForBatchStop = selectedPackagesForBatchStop + app.packageName
                                 },
                                 onForceStop = { viewModel.forceStopSingle(app) },
+                                onRun = { viewModel.launchApp(app.packageName) },
+                                onToggleRestrictForeground = { viewModel.toggleRestrictRunningAsForeground(app) },
                                 onOpenWakeup = { viewModel.selectAppForWakeup(app) },
                                 onRemove = { viewModel.removeAppFromFreezeList(app.packageName) },
                                 onToggleIgnoreWorking = { viewModel.toggleIgnoreWorkingState(app) }
@@ -713,6 +833,8 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                                         selectedPackagesForBatchStop = selectedPackagesForBatchStop + app.packageName
                                     },
                                     onForceStop = { viewModel.forceStopSingle(app) },
+                                    onRun = { viewModel.launchApp(app.packageName) },
+                                    onToggleRestrictForeground = { viewModel.toggleRestrictRunningAsForeground(app) },
                                     onOpenWakeup = { viewModel.selectAppForWakeup(app) },
                                     onRemove = { viewModel.removeAppFromFreezeList(app.packageName) },
                                     onToggleIgnoreWorking = { viewModel.toggleIgnoreWorkingState(app) }
@@ -812,6 +934,8 @@ private fun GreenifyStyleAppCard(
     onToggleSelect: () -> Unit,
     onLongClick: () -> Unit,
     onForceStop: () -> Unit,
+    onRun: () -> Unit,
+    onToggleRestrictForeground: () -> Unit,
     onOpenWakeup: () -> Unit,
     onRemove: () -> Unit,
     onToggleIgnoreWorking: () -> Unit
@@ -921,76 +1045,6 @@ private fun GreenifyStyleAppCard(
                         }
                     }
                 }
-
-                // Working State Protection / Ignored Status Display
-                if (app.state == AppState.WORKING_STATE) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    if (app.ignoreWorkingState) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(Color(0xFFFEF3C7))
-                                .border(1.dp, Color(0xFFF59E0B), RoundedCornerShape(6.dp))
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.Warning,
-                                    contentDescription = null,
-                                    tint = Color(0xFFD97706),
-                                    modifier = Modifier.size(11.dp)
-                                )
-                                Spacer(modifier = Modifier.width(3.dp))
-                                Text(
-                                    text = "Working Mode Ignored",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFB45309)
-                                )
-                            }
-                        }
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f))
-                                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.Shield,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(11.dp)
-                                )
-                                Spacer(modifier = Modifier.width(3.dp))
-                                Text(
-                                    text = "Protected (Working Mode)",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
-                    }
-                } else if (app.ignoreWorkingState) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(Color(0xFFFEF3C7))
-                            .border(1.dp, Color(0xFFF59E0B), RoundedCornerShape(6.dp))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
-                        Text(
-                            text = "Working Mode Ignored",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFFB45309)
-                        )
-                    }
-                }
             }
 
             Spacer(modifier = Modifier.width(8.dp))
@@ -1035,38 +1089,74 @@ private fun GreenifyStyleAppCard(
                         onDismissRequest = { showItemMenu = false }
                     ) {
                         DropdownMenuItem(
+                            text = { Text("Run") },
+                            onClick = {
+                                showItemMenu = false
+                                onRun()
+                            },
+                            leadingIcon = { Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Degreenify selected app") },
+                            onClick = {
+                                showItemMenu = false
+                                onRemove()
+                            },
+                            leadingIcon = { Icon(imageVector = Icons.Default.Delete, contentDescription = null) }
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Restrict running as foreground")
+                                    Checkbox(
+                                        checked = app.isRestrictedForeground,
+                                        onCheckedChange = null,
+                                        colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary)
+                                    )
+                                }
+                            },
+                            onClick = {
+                                onToggleRestrictForeground()
+                            }
+                        )
+                        HorizontalDivider()
+                        Text(
+                            text = "HIBERNATION SETTINGS",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Ignore working state")
+                                    Checkbox(
+                                        checked = app.ignoreWorkingState,
+                                        onCheckedChange = null,
+                                        colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary)
+                                    )
+                                }
+                            },
+                            onClick = {
+                                onToggleIgnoreWorking()
+                            }
+                        )
+                        DropdownMenuItem(
                             text = { Text("Inspect Wake-Ups") },
                             onClick = {
                                 showItemMenu = false
                                 onOpenWakeup()
                             },
                             leadingIcon = { Icon(imageVector = Icons.Default.Bolt, contentDescription = null) }
-                        )
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    text = if (app.ignoreWorkingState) "Protect Working Mode" else "Ignore Working Mode"
-                                )
-                            },
-                            onClick = {
-                                showItemMenu = false
-                                onToggleIgnoreWorking()
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = if (app.ignoreWorkingState) Icons.Default.Shield else Icons.Default.Warning,
-                                    contentDescription = null,
-                                    tint = if (app.ignoreWorkingState) MaterialTheme.colorScheme.primary else Color(0xFFEA580C)
-                                )
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Remove from List") },
-                            onClick = {
-                                showItemMenu = false
-                                onRemove()
-                            },
-                            leadingIcon = { Icon(imageVector = Icons.Default.Delete, contentDescription = null) }
                         )
                     }
                 }

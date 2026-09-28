@@ -101,6 +101,7 @@ data class InstalledAppItem(
     val firstInstallTime: Long = 0L,
     val appSize: Long = 0L,
     val ignoreWorkingState: Boolean = false,
+    val isRestrictedForeground: Boolean = false,
     val isStoppedState: Boolean = false,
     val isUnsafeToForceStop: Boolean = false,
     val unsafeReason: String = ""

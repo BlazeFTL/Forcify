@@ -114,6 +114,27 @@ class PureStopPreferences(context: Context) {
         return newState
     }
 
+    fun getRestrictedForegroundPackages(): Set<String> {
+        return prefs.getStringSet("restricted_foreground_pkgs", emptySet()) ?: emptySet()
+    }
+
+    fun isRestrictRunningAsForeground(packageName: String): Boolean {
+        return getRestrictedForegroundPackages().contains(packageName)
+    }
+
+    fun toggleRestrictRunningAsForeground(packageName: String): Boolean {
+        val current = getRestrictedForegroundPackages().toMutableSet()
+        val newState = if (current.contains(packageName)) {
+            current.remove(packageName)
+            false
+        } else {
+            current.add(packageName)
+            true
+        }
+        prefs.edit().putStringSet("restricted_foreground_pkgs", current).apply()
+        return newState
+    }
+
     fun resetSetup() {
         prefs.edit()
             .putBoolean("is_setup_completed", false)
