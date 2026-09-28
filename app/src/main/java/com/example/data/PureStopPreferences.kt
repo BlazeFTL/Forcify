@@ -54,6 +54,14 @@ class PureStopPreferences(context: Context) {
         get() = prefs.getStringSet("saved_pending_packages", emptySet()) ?: emptySet()
         set(value) = prefs.edit().putStringSet("saved_pending_packages", value).apply()
 
+    fun getSavedAppName(packageName: String): String? {
+        return prefs.getString("app_name_$packageName", null)
+    }
+
+    fun setSavedAppName(packageName: String, name: String) {
+        prefs.edit().putString("app_name_$packageName", name).apply()
+    }
+
     fun isBootCutForPackage(packageName: String): Boolean {
         return prefs.getBoolean("boot_cut_$packageName", false)
     }

@@ -619,17 +619,29 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                     CircularProgressIndicator()
                 }
             } else if (allManagedApps.isEmpty()) {
-                // Empty state when no apps are added yet
-                EmptyStateView(
-                    isSearchActive = searchQuery.isNotBlank(),
-                    onAddApps = { viewModel.openAddApps() }
-                )
-            } else if (filteredNotHibernating.isEmpty() && filteredWillHibernateSoon.isEmpty()) {
-                if (allManagedApps.isEmpty()) {
+                if (viewModel.preferences.savedManagedPackages.isNotEmpty() || !isInitialScanCompleted) {
+                    // Restoring cached items on startup, do NOT flash "No Apps Added Yet"
+                    Box(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(36.dp), strokeWidth = 3.dp)
+                    }
+                } else {
+                    // Truly empty state when no apps are added yet
                     EmptyStateView(
                         isSearchActive = searchQuery.isNotBlank(),
                         onAddApps = { viewModel.openAddApps() }
                     )
+                }
+            } else if (filteredNotHibernating.isEmpty() && filteredWillHibernateSoon.isEmpty()) {
+                if (allManagedApps.isEmpty()) {
+                    if (viewModel.preferences.savedManagedPackages.isEmpty() && isInitialScanCompleted) {
+                        EmptyStateView(
+                            isSearchActive = searchQuery.isNotBlank(),
+                            onAddApps = { viewModel.openAddApps() }
+                        )
+                    }
                 } else if (!isInitialScanCompleted) {
                     // Smooth initial scan in progress, do not flash empty state
                     Box(
