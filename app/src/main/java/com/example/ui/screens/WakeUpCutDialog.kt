@@ -126,9 +126,10 @@ fun WakeUpCutDialog(
                 .fillMaxHeight(0.92f)
                 .padding(vertical = 12.dp),
             shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp,
-            shadowElevation = 16.dp
+            color = Color.White,
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+            tonalElevation = 4.dp,
+            shadowElevation = 12.dp
         ) {
             Column(
                 modifier = Modifier
@@ -174,9 +175,10 @@ fun WakeUpCutDialog(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        containerColor = Color.White
                     ),
-                    shape = RoundedCornerShape(14.dp)
+                    shape = RoundedCornerShape(14.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                 ) {
                     Row(
                         modifier = Modifier
@@ -382,13 +384,16 @@ fun WakeUpCutDialog(
                             onForceStop(app)
                             onDismiss()
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = StateEvading),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
                         shape = RoundedCornerShape(10.dp),
                         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
                     ) {
                         Icon(imageVector = Icons.Default.StopCircle, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text(text = "Force Stop", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text(text = "Stop", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(
@@ -446,21 +451,13 @@ private fun DetailedWakeUpPathCard(
             .clip(RoundedCornerShape(12.dp))
             .border(
                 width = 1.dp,
-                color = when {
-                    path.isActiveVector -> Color(0xFFEA580C)
-                    path.isCut -> StateFree.copy(alpha = 0.45f)
-                    else -> MaterialTheme.colorScheme.outlineVariant
-                },
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
                 shape = RoundedCornerShape(12.dp)
             ),
         colors = CardDefaults.cardColors(
-            containerColor = when {
-                path.isActiveVector -> Color(0xFFFFF7ED)
-                path.isCut -> StateFree.copy(alpha = 0.05f)
-                else -> MaterialTheme.colorScheme.surface
-            }
+            containerColor = Color.White
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier
@@ -583,15 +580,17 @@ private fun DetailedWakeUpPathCard(
                     checked = path.isCut,
                     onCheckedChange = onToggle,
                     colors = SwitchDefaults.colors(
-                        checkedThumbColor = StateFree,
-                        checkedTrackColor = StateFree.copy(alpha = 0.35f)
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = MaterialTheme.colorScheme.primary,
+                        uncheckedThumbColor = Color.White,
+                        uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
                     )
                 )
                 Text(
-                    text = if (path.isCut) "Cut ✂️" else "Active",
+                    text = if (path.isCut) "Cut" else "Active",
                     fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (path.isCut) StateFree else StateEvading
+                    fontWeight = FontWeight.Medium,
+                    color = if (path.isCut) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }

@@ -33,9 +33,11 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PowerOff
 import androidx.compose.material.icons.filled.PowerSettingsNew
@@ -44,12 +46,14 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.StopCircle
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -232,12 +236,53 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                     )
                 )
             } else {
-                TopAppBar(
+                CenterAlignedTopAppBar(
+                    navigationIcon = {
+                        // Mode Indicator Pill (Root / Non-Root) on the left side
+                        Box(
+                            modifier = Modifier
+                                .padding(start = 12.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (operatingMode == OperatingMode.ROOT)
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                    else
+                                        StateFree.copy(alpha = 0.15f)
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    color = if (operatingMode == OperatingMode.ROOT)
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+                                    else
+                                        StateFree.copy(alpha = 0.3f),
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                .clickable { showModeDialog = true }
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = if (operatingMode == OperatingMode.ROOT) Icons.Default.Bolt else Icons.Default.Shield,
+                                    contentDescription = null,
+                                    tint = if (operatingMode == OperatingMode.ROOT) MaterialTheme.colorScheme.primary else StateFree,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = if (operatingMode == OperatingMode.ROOT) "Root" else "Non-Root",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (operatingMode == OperatingMode.ROOT) MaterialTheme.colorScheme.primary else StateFree
+                                )
+                            }
+                        }
+                    },
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(
                                 modifier = Modifier
-                                    .size(32.dp)
+                                    .size(30.dp)
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(MaterialTheme.colorScheme.primary),
                                 contentAlignment = Alignment.Center
@@ -246,55 +291,16 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                                     imageVector = Icons.Default.Bolt,
                                     contentDescription = null,
                                     tint = Color.White,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
-                            Spacer(modifier = Modifier.width(10.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = "ForCify",
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 20.sp,
+                                fontSize = 19.sp,
                                 color = MaterialTheme.colorScheme.onBackground
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            // Mode Indicator Pill (Root / Non-Root)
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(
-                                        if (operatingMode == OperatingMode.ROOT)
-                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                                        else
-                                            StateFree.copy(alpha = 0.15f)
-                                    )
-                                    .border(
-                                        width = 1.dp,
-                                        color = if (operatingMode == OperatingMode.ROOT)
-                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
-                                        else
-                                            StateFree.copy(alpha = 0.3f),
-                                        shape = RoundedCornerShape(12.dp)
-                                    )
-                                    .clickable { showModeDialog = true }
-                                    .padding(horizontal = 8.dp, vertical = 3.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = if (operatingMode == OperatingMode.ROOT) Icons.Default.Bolt else Icons.Default.Shield,
-                                        contentDescription = null,
-                                        tint = if (operatingMode == OperatingMode.ROOT) MaterialTheme.colorScheme.primary else StateFree,
-                                        modifier = Modifier.size(12.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = if (operatingMode == OperatingMode.ROOT) "Root" else "Non-Root",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = if (operatingMode == OperatingMode.ROOT) MaterialTheme.colorScheme.primary else StateFree
-                                    )
-                                }
-                            }
                         }
                     },
                     actions = {
@@ -389,13 +395,13 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                                     }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Re-run Setup Wizard", fontWeight = FontWeight.Medium) },
+                                    text = { Text("Reconfigure Setup", fontWeight = FontWeight.Medium) },
                                     onClick = {
                                         showMenu = false
                                         viewModel.resetSetup()
                                     },
                                     leadingIcon = {
-                                        Icon(imageVector = Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Icon(imageVector = Icons.Default.Tune, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                     }
                                 )
                             }
@@ -984,20 +990,15 @@ private fun GreenifyStyleAppCard(
         app.state != AppState.WORKING_STATE
 
     val stateText = when {
+        app.stateDetail.isNotBlank() && app.stateDetail != "Hibernated" && app.stateDetail != "Pending Hibernation" -> app.stateDetail
         app.state == AppState.EVADING_RESTRICTIONS -> "Running as foreground (evading restrictions)"
         app.state == AppState.FOREGROUND -> "Foreground"
-        app.state == AppState.WORKING_STATE -> "Active Task (Downloading / Media)"
+        app.state == AppState.WORKING_STATE -> "Being used by Accessibility"
         isWillHibernateSoon -> ""
-        app.stateDetail.isNotBlank() && app.stateDetail != "Hibernated" && app.stateDetail != "Pending Hibernation" -> app.stateDetail
         else -> ""
     }
 
-    val stateColor = when (app.state) {
-        AppState.EVADING_RESTRICTIONS -> StateEvading
-        AppState.FOREGROUND -> StateForeground
-        AppState.WORKING_STATE -> StateWorking
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
+    val stateColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
 
     Card(
         modifier = Modifier
@@ -1122,12 +1123,12 @@ private fun GreenifyStyleAppCard(
                         expanded = showItemMenu,
                         onDismissRequest = { showItemMenu = false },
                         modifier = Modifier
-                            .widthIn(min = 250.dp)
+                            .widthIn(min = 220.dp, max = 255.dp)
                             .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(16.dp)),
                         shape = RoundedCornerShape(16.dp),
                         containerColor = Color.White,
                         tonalElevation = 6.dp,
-                        shadowElevation = 12.dp
+                        shadowElevation = 10.dp
                     ) {
                         // 1. Launch App
                         DropdownMenuItem(
@@ -1175,22 +1176,21 @@ private fun GreenifyStyleAppCard(
 
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 4.dp))
 
-                        // Header: HIBERNATION RULES
-                        Text(
-                            text = "HIBERNATION RULES",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
-                        )
-
-                        // 3. Ignore Working State (toggles whether app is frozen even during active playback/fg service)
+                        // 3. Ignore Working State
                         DropdownMenuItem(
                             text = {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text("Ignore Working State", fontWeight = FontWeight.Medium, fontSize = 13.sp)
                                     Text("Hibernate even if active / audio playing", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Shield,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
                             },
                             trailingIcon = {
                                 Checkbox(
@@ -1212,6 +1212,14 @@ private fun GreenifyStyleAppCard(
                                     Text("Prevent sticky background notifications", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.NotificationsOff,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            },
                             trailingIcon = {
                                 Checkbox(
                                     checked = app.isRestrictedForeground,
@@ -1229,7 +1237,7 @@ private fun GreenifyStyleAppCard(
                         // 5. Remove from ForCify
                         DropdownMenuItem(
                             text = {
-                                Text("Remove from ForCify", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = Color(0xFFDC2626))
+                                Text("Remove from ForCify", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface)
                             },
                             onClick = {
                                 showItemMenu = false
@@ -1237,9 +1245,9 @@ private fun GreenifyStyleAppCard(
                             },
                             leadingIcon = {
                                 Icon(
-                                    imageVector = Icons.Default.Delete,
+                                    imageVector = Icons.Default.DeleteOutline,
                                     contentDescription = null,
-                                    tint = Color(0xFFDC2626),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }

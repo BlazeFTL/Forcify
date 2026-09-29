@@ -511,21 +511,19 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                         val (state, stateDetail, secondaryDetail) = if (isStoppedState) {
                             Triple(AppState.BACKGROUND_FREE, "Hibernated", "")
                         } else if (isAccessibilityActive) {
-                            Triple(AppState.WORKING_STATE, "Being used by Accessibility", "Active accessibility service")
+                            val sub = mutableListOf<String>()
+                            if (isWorkingIgnored) sub.add("Ignored running state")
+                            Triple(AppState.WORKING_STATE, "Being used by Accessibility", sub.joinToString("\n"))
                         } else if (isTopForeground) {
                             val sub = mutableListOf<String>()
                             if (isWorkingIgnored) sub.add("Ignored running state")
                             if (showRestrictedForeground) sub.add("Restricted running as foreground")
                             Triple(AppState.FOREGROUND, "Foreground", sub.joinToString("\n"))
                         } else if (isFgService) {
-                            if (isDownloaderOrMedia && !isWorkingIgnored) {
-                                Triple(AppState.WORKING_STATE, "Active Task (Downloading / Media)", "Protected ongoing task")
-                            } else {
-                                val sub = mutableListOf<String>()
-                                if (isWorkingIgnored) sub.add("Ignored running state")
-                                if (showRestrictedForeground) sub.add("Restricted running as foreground")
-                                Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", sub.joinToString("\n"))
-                            }
+                            val sub = mutableListOf<String>()
+                            if (isWorkingIgnored) sub.add("Ignored running state")
+                            if (showRestrictedForeground) sub.add("Restricted running as foreground")
+                            Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", sub.joinToString("\n"))
                         } else if (isRunning) {
                             val sub = mutableListOf<String>()
                             if (isWorkingIgnored) sub.add("Ignored running state")

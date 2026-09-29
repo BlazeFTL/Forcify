@@ -106,14 +106,15 @@ object RootExecutor {
     suspend fun queryRootProcessStates(): Map<String, RootProcessState> = withContext(Dispatchers.IO) {
         val map = mutableMapOf<String, RootProcessState>()
         try {
-            // Fast combined root query: ps + services + processes (procState=TOP / FGS) + top activity
-            val cmd = "ps -A -o PID,NAME; echo '===SERVICES==='; dumpsys activity services | grep -E 'ServiceRecord|isForeground='; echo '===PROCESSES==='; dumpsys activity processes | grep -E 'ProcessRecord\\{|curProcState=|procState='; echo '===TOP==='; dumpsys activity activities | grep -E 'mResumedActivity|mFocusedApp'; exit 0"
+            // Fast combined root query: ps + services + processes (procState=TOP / FGS) + media playback + top activity
+            val cmd = "ps -A -o PID,NAME; echo '===SERVICES==='; dumpsys activity services | grep -E 'ServiceRecord|isForeground='; echo '===PROCESSES==='; dumpsys activity processes | grep -E 'ProcessRecord\\{|curProcState=|procState='; echo '===MEDIA==='; dumpsys media_session | grep -E 'package=|state=PlaybackState'; echo '===TOP==='; dumpsys activity activities | grep -E 'mResumedActivity|mFocusedApp'; exit 0"
             val res = executeCommand(cmd)
             val output = res.getOrNull() ?: ""
             if (output.isNotEmpty()) {
-                var section = 0 // 0 = ps, 1 = services, 2 = processes, 3 = top
+                var section = 0 // 0 = ps, 1 = services, 2 = processes, 3 = media, 4 = top
                 var lastServicePkg: String? = null
                 var lastProcessPkg: String? = null
+                var lastMediaPkg: String? = null
 
                 for (line in output.lines()) {
                     val trimmed = line.trim()
@@ -126,8 +127,12 @@ object RootExecutor {
                         section = 2
                         continue
                     }
-                    if (trimmed == "===TOP===") {
+                    if (trimmed == "===MEDIA===") {
                         section = 3
+                        continue
+                    }
+                    if (trimmed == "===TOP===") {
+                        section = 4
                         continue
                     }
 
@@ -178,6 +183,18 @@ object RootExecutor {
                             }
                         }
                         3 -> {
+                            if (trimmed.contains("package=")) {
+                                val match = Regex("package=([a-zA-Z0-9._]+)").find(trimmed)
+                                if (match != null) {
+                                    lastMediaPkg = match.groupValues[1]
+                                }
+                            }
+                            if (trimmed.contains("state=3") && lastMediaPkg != null) {
+                                val existing = map[lastMediaPkg] ?: RootProcessState(isRunning = true)
+                                map[lastMediaPkg] = existing.copy(isRunning = true, isForegroundService = true)
+                            }
+                        }
+                        4 -> {
                             val match = Regex("u0\\s+([a-zA-Z0-9._]+)/").find(trimmed)
                             val topPkg = match?.groupValues?.get(1)
                             if (!topPkg.isNullOrEmpty() && !topPkg.contains("launcher") && !topPkg.contains("forcify")) {
