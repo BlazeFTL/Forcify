@@ -127,13 +127,14 @@ fun WakeUpCutDialog(
                 .padding(vertical = 12.dp),
             shape = RoundedCornerShape(24.dp),
             color = Color.White,
-            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
-            tonalElevation = 4.dp,
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0)),
+            tonalElevation = 0.dp,
             shadowElevation = 12.dp
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
+                    .background(Color.White)
                     .padding(horizontal = 20.dp, vertical = 16.dp)
             ) {
                 // Header: App Icon, App Name, Close Button
@@ -178,7 +179,7 @@ fun WakeUpCutDialog(
                         containerColor = Color.White
                     ),
                     shape = RoundedCornerShape(14.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0))
                 ) {
                     Row(
                         modifier = Modifier
@@ -451,7 +452,7 @@ private fun DetailedWakeUpPathCard(
             .clip(RoundedCornerShape(12.dp))
             .border(
                 width = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                color = Color(0xFFE2E8F0),
                 shape = RoundedCornerShape(12.dp)
             ),
         colors = CardDefaults.cardColors(

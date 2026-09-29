@@ -109,7 +109,8 @@ fun CutBootReceiversDialog(
         dragHandle = {
             BottomSheetDefaults.DragHandle()
         },
-        containerColor = MaterialTheme.colorScheme.surface,
+        containerColor = Color.White,
+        tonalElevation = 0.dp,
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
     ) {
         Column(

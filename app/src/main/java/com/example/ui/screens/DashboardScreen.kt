@@ -346,11 +346,11 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                                 expanded = showMenu,
                                 onDismissRequest = { showMenu = false },
                                 modifier = Modifier
-                                    .widthIn(min = 220.dp)
-                                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(16.dp)),
+                                    .widthIn(min = 230.dp)
+                                    .border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(16.dp)),
                                 shape = RoundedCornerShape(16.dp),
                                 containerColor = Color.White,
-                                tonalElevation = 6.dp,
+                                tonalElevation = 0.dp,
                                 shadowElevation = 10.dp
                             ) {
                                 DropdownMenuItem(
@@ -383,7 +383,7 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                                         Icon(imageVector = Icons.Default.PowerOff, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                     }
                                 )
-                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                                HorizontalDivider(color = Color(0xFFE2E8F0))
                                 DropdownMenuItem(
                                     text = { Text("Switch Operating Mode", fontWeight = FontWeight.Medium) },
                                     onClick = {
@@ -395,7 +395,7 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                                     }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Reconfigure Setup", fontWeight = FontWeight.Medium) },
+                                    text = { Text("Re-run Setup Wizard", fontWeight = FontWeight.Medium) },
                                     onClick = {
                                         showMenu = false
                                         viewModel.resetSetup()
@@ -1123,11 +1123,11 @@ private fun GreenifyStyleAppCard(
                         expanded = showItemMenu,
                         onDismissRequest = { showItemMenu = false },
                         modifier = Modifier
-                            .widthIn(min = 220.dp, max = 255.dp)
-                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(16.dp)),
+                            .widthIn(min = 300.dp, max = 345.dp)
+                            .border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(16.dp)),
                         shape = RoundedCornerShape(16.dp),
                         containerColor = Color.White,
-                        tonalElevation = 6.dp,
+                        tonalElevation = 0.dp,
                         shadowElevation = 10.dp
                     ) {
                         // 1. Launch App
@@ -1135,7 +1135,7 @@ private fun GreenifyStyleAppCard(
                             text = {
                                 Column {
                                     Text("Launch Application", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                    Text("Open app in foreground", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("Open app in foreground", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             },
                             onClick = {
@@ -1157,7 +1157,7 @@ private fun GreenifyStyleAppCard(
                             text = {
                                 Column {
                                     Text("Inspect Wake-Ups", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                    Text("${app.wakeUpDetails.paths.size} wake-up path(s) detected", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("${app.wakeUpDetails.paths.size} wake-up path(s) detected", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             },
                             onClick = {
@@ -1174,14 +1174,14 @@ private fun GreenifyStyleAppCard(
                             }
                         )
 
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 4.dp))
+                        HorizontalDivider(color = Color(0xFFE2E8F0), modifier = Modifier.padding(vertical = 4.dp))
 
                         // 3. Ignore Working State
                         DropdownMenuItem(
                             text = {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text("Ignore Working State", fontWeight = FontWeight.Medium, fontSize = 13.sp)
-                                    Text("Hibernate even if active / audio playing", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                    Text("Ignore Working State", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                    Text("Hibernate during background playback", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             },
                             leadingIcon = {
@@ -1207,9 +1207,9 @@ private fun GreenifyStyleAppCard(
                         // 4. Restrict Running as Foreground
                         DropdownMenuItem(
                             text = {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text("Block Foreground Service", fontWeight = FontWeight.Medium, fontSize = 13.sp)
-                                    Text("Prevent sticky background notifications", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                    Text("Block Foreground Service", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                    Text("Prevent sticky background notifications", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             },
                             leadingIcon = {
@@ -1232,7 +1232,7 @@ private fun GreenifyStyleAppCard(
                             }
                         )
 
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 4.dp))
+                        HorizontalDivider(color = Color(0xFFE2E8F0), modifier = Modifier.padding(vertical = 4.dp))
 
                         // 5. Remove from ForCify
                         DropdownMenuItem(
