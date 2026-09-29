@@ -1004,8 +1004,8 @@ private fun GreenifyStyleAppCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .border(
-                width = if (isSelected) 2.dp else 1.dp,
-                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
                 shape = RoundedCornerShape(12.dp)
             )
             .combinedClickable(
@@ -1019,12 +1019,9 @@ private fun GreenifyStyleAppCard(
                 onLongClick = onLongClick
             ),
         colors = CardDefaults.cardColors(
-            containerColor = if (isSelected)
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
-            else
-                MaterialTheme.colorScheme.surface
+            containerColor = Color.White
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier

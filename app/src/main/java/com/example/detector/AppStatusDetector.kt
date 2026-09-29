@@ -82,6 +82,34 @@ class AppStatusDetector(private val context: Context) {
         return isSystemFlag || isUpdatedSystemFlag || isSystemDir || isSystemPrefix
     }
 
+    fun getEnabledAccessibilityPackages(): Set<String> {
+        val result = mutableSetOf<String>()
+        try {
+            val enabledServices = android.provider.Settings.Secure.getString(
+                context.contentResolver,
+                android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            )
+            if (!enabledServices.isNullOrBlank()) {
+                val colonSplitter = android.text.TextUtils.SimpleStringSplitter(':')
+                colonSplitter.setString(enabledServices)
+                while (colonSplitter.hasNext()) {
+                    val componentNameString = colonSplitter.next()
+                    val componentName = android.content.ComponentName.unflattenFromString(componentNameString)
+                    if (componentName != null) {
+                        result.add(componentName.packageName)
+                    }
+                }
+            }
+            val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? android.view.accessibility.AccessibilityManager
+            am?.getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK)?.forEach {
+                result.add(it.resolveInfo.serviceInfo.packageName)
+            }
+        } catch (e: Exception) {
+            // Ignore
+        }
+        return result
+    }
+
     suspend fun getRunningProcessesMap(): Map<String, ActivityManager.RunningAppProcessInfo> =
         withContext(Dispatchers.Default) {
             val map = mutableMapOf<String, ActivityManager.RunningAppProcessInfo>()

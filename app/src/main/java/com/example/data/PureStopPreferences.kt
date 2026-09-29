@@ -66,6 +66,22 @@ class PureStopPreferences(context: Context) {
         prefs.edit().putString("app_name_$packageName", name).apply()
     }
 
+    fun getSavedAppState(packageName: String): com.example.model.AppState? {
+        val s = prefs.getString("saved_state_$packageName", null) ?: return null
+        return try { com.example.model.AppState.valueOf(s) } catch (e: Exception) { null }
+    }
+
+    fun setSavedAppState(packageName: String, state: com.example.model.AppState, detail: String, secondary: String) {
+        prefs.edit()
+            .putString("saved_state_$packageName", state.name)
+            .putString("saved_detail_$packageName", detail)
+            .putString("saved_secondary_$packageName", secondary)
+            .apply()
+    }
+
+    fun getSavedStateDetail(packageName: String): String? = prefs.getString("saved_detail_$packageName", null)
+    fun getSavedSecondaryDetail(packageName: String): String? = prefs.getString("saved_secondary_$packageName", null)
+
     fun isBootCutForPackage(packageName: String): Boolean {
         return prefs.getBoolean("boot_cut_$packageName", false)
     }

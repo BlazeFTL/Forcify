@@ -106,13 +106,14 @@ object RootExecutor {
     suspend fun queryRootProcessStates(): Map<String, RootProcessState> = withContext(Dispatchers.IO) {
         val map = mutableMapOf<String, RootProcessState>()
         try {
-            // Combined fast root query for processes, foreground services, and top package
-            val cmd = "ps -A -o PID,NAME; echo '===SERVICES==='; dumpsys activity services | grep -E 'ServiceRecord|isForeground='; echo '===TOP==='; dumpsys activity activities | grep 'mResumedActivity'; exit 0"
+            // Fast combined root query: ps + services + processes (procState=TOP / FGS) + top activity
+            val cmd = "ps -A -o PID,NAME; echo '===SERVICES==='; dumpsys activity services | grep -E 'ServiceRecord|isForeground='; echo '===PROCESSES==='; dumpsys activity processes | grep -E 'ProcessRecord\\{|curProcState=|procState='; echo '===TOP==='; dumpsys activity activities | grep -E 'mResumedActivity|mFocusedApp'; exit 0"
             val res = executeCommand(cmd)
             val output = res.getOrNull() ?: ""
             if (output.isNotEmpty()) {
-                var section = 0 // 0 = ps, 1 = services, 2 = top
+                var section = 0 // 0 = ps, 1 = services, 2 = processes, 3 = top
                 var lastServicePkg: String? = null
+                var lastProcessPkg: String? = null
 
                 for (line in output.lines()) {
                     val trimmed = line.trim()
@@ -121,8 +122,12 @@ object RootExecutor {
                         section = 1
                         continue
                     }
-                    if (trimmed == "===TOP===") {
+                    if (trimmed == "===PROCESSES===") {
                         section = 2
+                        continue
+                    }
+                    if (trimmed == "===TOP===") {
+                        section = 3
                         continue
                     }
 
@@ -153,6 +158,26 @@ object RootExecutor {
                             }
                         }
                         2 -> {
+                            // dumpsys activity processes: ProcessRecord{... u0 ...:package} or curProcState=TOP/FGS
+                            if (trimmed.contains("ProcessRecord{")) {
+                                val match = Regex("u0\\s+[a-zA-Z0-9._]+:([a-zA-Z0-9._]+)").find(trimmed) ?:
+                                            Regex(":([a-zA-Z0-9._]+)/").find(trimmed) ?:
+                                            Regex("u0\\s+([a-zA-Z0-9._]+)").find(trimmed)
+                                if (match != null) {
+                                    lastProcessPkg = match.groupValues[1].substringBefore(':')
+                                }
+                            }
+                            if (lastProcessPkg != null) {
+                                if (trimmed.contains("procState=TOP") || trimmed.contains("curProcState=TOP")) {
+                                    val existing = map[lastProcessPkg] ?: RootProcessState(isRunning = true)
+                                    map[lastProcessPkg] = existing.copy(isRunning = true, isTop = true)
+                                } else if (trimmed.contains("procState=FGS") || trimmed.contains("curProcState=FGS") || trimmed.contains("procState=BFGS")) {
+                                    val existing = map[lastProcessPkg] ?: RootProcessState(isRunning = true)
+                                    map[lastProcessPkg] = existing.copy(isRunning = true, isForegroundService = true)
+                                }
+                            }
+                        }
+                        3 -> {
                             val match = Regex("u0\\s+([a-zA-Z0-9._]+)/").find(trimmed)
                             val topPkg = match?.groupValues?.get(1)
                             if (!topPkg.isNullOrEmpty() && !topPkg.contains("launcher") && !topPkg.contains("forcify")) {
