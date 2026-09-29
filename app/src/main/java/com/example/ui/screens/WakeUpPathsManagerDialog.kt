@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderShared
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.BottomSheetDefaults
@@ -198,6 +199,52 @@ fun WakeUpPathsManagerDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         lineHeight = 16.sp
                     )
+                }
+            }
+
+            // Quick Recovery Card to undo accidental cuts & fix apps not remembering state
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFFEFF6FF)
+                ),
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFBFDBFE))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Apps not remembering state?",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "One-tap reset all system defaults to fix app memory & recents.",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Button(
+                        onClick = { viewModel.resetAllAppOpsToSystemDefault() },
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Text("Reset Defaults", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
 
@@ -442,17 +489,14 @@ private fun WakeUpAppCard(
             .clip(RoundedCornerShape(12.dp))
             .border(
                 width = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
                 shape = RoundedCornerShape(12.dp)
             )
             .animateContentSize(),
         colors = CardDefaults.cardColors(
-            containerColor = if (isSelected)
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)
-            else
-                MaterialTheme.colorScheme.surface
+            containerColor = Color.White
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Row(

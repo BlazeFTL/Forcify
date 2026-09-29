@@ -1123,77 +1123,129 @@ private fun GreenifyStyleAppCard(
                     }
                     DropdownMenu(
                         expanded = showItemMenu,
-                        onDismissRequest = { showItemMenu = false }
+                        onDismissRequest = { showItemMenu = false },
+                        modifier = Modifier
+                            .widthIn(min = 250.dp)
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(16.dp)),
+                        shape = RoundedCornerShape(16.dp),
+                        containerColor = Color.White,
+                        tonalElevation = 6.dp,
+                        shadowElevation = 12.dp
                     ) {
+                        // 1. Launch App
                         DropdownMenuItem(
-                            text = { Text("Run") },
+                            text = {
+                                Column {
+                                    Text("Launch Application", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                    Text("Open app in foreground", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            },
                             onClick = {
                                 showItemMenu = false
                                 onRun()
                             },
-                            leadingIcon = { Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Degreenify selected app") },
-                            onClick = {
-                                showItemMenu = false
-                                onRemove()
-                            },
-                            leadingIcon = { Icon(imageVector = Icons.Default.Delete, contentDescription = null) }
-                        )
-                        DropdownMenuItem(
-                            text = {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text("Restrict running as foreground")
-                                    Checkbox(
-                                        checked = app.isRestrictedForeground,
-                                        onCheckedChange = null,
-                                        colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary)
-                                    )
-                                }
-                            },
-                            onClick = {
-                                onToggleRestrictForeground()
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.PlayArrow,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
                             }
                         )
-                        HorizontalDivider()
-                        Text(
-                            text = "HIBERNATION SETTINGS",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-                        )
+
+                        // 2. Inspect Wake-Ups & Paths
                         DropdownMenuItem(
                             text = {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text("Ignore working state")
-                                    Checkbox(
-                                        checked = app.ignoreWorkingState,
-                                        onCheckedChange = null,
-                                        colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary)
-                                    )
+                                Column {
+                                    Text("Inspect Wake-Ups", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                    Text("${app.wakeUpDetails.paths.size} wake-up path(s) detected", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
+                            },
+                            onClick = {
+                                showItemMenu = false
+                                onOpenWakeup()
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.ContentCut,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        )
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 4.dp))
+
+                        // Header: HIBERNATION RULES
+                        Text(
+                            text = "HIBERNATION RULES",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
+                        )
+
+                        // 3. Ignore Working State (toggles whether app is frozen even during active playback/fg service)
+                        DropdownMenuItem(
+                            text = {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Ignore Working State", fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                                    Text("Hibernate even if active / audio playing", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            },
+                            trailingIcon = {
+                                Checkbox(
+                                    checked = app.ignoreWorkingState,
+                                    onCheckedChange = { onToggleIgnoreWorking() },
+                                    colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary)
+                                )
                             },
                             onClick = {
                                 onToggleIgnoreWorking()
                             }
                         )
+
+                        // 4. Restrict Running as Foreground
                         DropdownMenuItem(
-                            text = { Text("Inspect Wake-Ups") },
+                            text = {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Block Foreground Service", fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                                    Text("Prevent sticky background notifications", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            },
+                            trailingIcon = {
+                                Checkbox(
+                                    checked = app.isRestrictedForeground,
+                                    onCheckedChange = { onToggleRestrictForeground() },
+                                    colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary)
+                                )
+                            },
+                            onClick = {
+                                onToggleRestrictForeground()
+                            }
+                        )
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 4.dp))
+
+                        // 5. Remove from ForCify
+                        DropdownMenuItem(
+                            text = {
+                                Text("Remove from ForCify", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = Color(0xFFDC2626))
+                            },
                             onClick = {
                                 showItemMenu = false
-                                onOpenWakeup()
+                                onRemove()
                             },
-                            leadingIcon = { Icon(imageVector = Icons.Default.Bolt, contentDescription = null) }
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = null,
+                                    tint = Color(0xFFDC2626),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         )
                     }
                 }

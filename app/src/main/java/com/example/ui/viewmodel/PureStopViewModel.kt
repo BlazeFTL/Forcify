@@ -833,7 +833,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                 if (isNowRestricted) {
                     RootExecutor.executeCommand("cmd appops set ${app.packageName} START_FOREGROUND ignore; cmd appops set ${app.packageName} RUN_IN_BACKGROUND ignore; cmd appops set ${app.packageName} RUN_ANY_IN_BACKGROUND ignore")
                 } else {
-                    RootExecutor.executeCommand("cmd appops set ${app.packageName} START_FOREGROUND allow; cmd appops set ${app.packageName} RUN_IN_BACKGROUND allow; cmd appops set ${app.packageName} RUN_ANY_IN_BACKGROUND allow")
+                    RootExecutor.executeCommand("cmd appops set ${app.packageName} START_FOREGROUND default; cmd appops set ${app.packageName} RUN_IN_BACKGROUND default; cmd appops set ${app.packageName} RUN_ANY_IN_BACKGROUND default")
                 }
             }
             _managedAppsFlow.value = _managedAppsFlow.value.map {
@@ -1018,11 +1018,58 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
 
     fun restoreWakeUpPathsForPackages(packages: List<String>) {
         viewModelScope.launch(Dispatchers.IO) {
-            val apps = allManagedApps.value.filter { packages.contains(it.packageName) }
-            for (app in apps) {
-                restoreAllWakeUpPaths(app)
+            val isRoot = preferences.mode == OperatingMode.ROOT
+            for (pkg in packages) {
+                preferences.setCutPathsForPackage(pkg, emptySet())
             }
-            _statusMessage.value = "Restored / Re-attached wake-up paths for ${apps.size} app(s)"
+
+            if (isRoot) {
+                // Batch reset AppOps to standard Android default in a single root script (avoids process spawning lag and RAM spike)
+                RootExecutor.restoreWakeUpsBatch(packages)
+            } else {
+                val apps = allManagedApps.value.filter { packages.contains(it.packageName) }
+                for (app in apps) {
+                    engine.restoreWakeUps(app)
+                }
+            }
+
+            // Immediately update in-memory state cleanly
+            val pkgSet = packages.toSet()
+            _managedAppsFlow.value = _managedAppsFlow.value.map { item ->
+                if (pkgSet.contains(item.packageName)) {
+                    val updatedPaths = item.wakeUpDetails.paths.map { it.copy(isCut = false) }
+                    item.copy(
+                        wakeUpDetails = item.wakeUpDetails.copy(
+                            paths = updatedPaths,
+                            isCut = false
+                        )
+                    )
+                } else item
+            }
+
+            _statusMessage.value = "Restored system defaults & re-attached wakeups for ${packages.size} app(s)"
+            refreshManagedAppsOnly(silent = true)
+        }
+    }
+
+    fun resetAllAppOpsToSystemDefault() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val allPkgs = allManagedApps.value.map { it.packageName }
+            for (pkg in allPkgs) {
+                preferences.setCutPathsForPackage(pkg, emptySet())
+            }
+            preferences.setRestrictedForegroundPackages(emptySet())
+            if (preferences.mode == OperatingMode.ROOT) {
+                RootExecutor.restoreWakeUpsBatch(allPkgs)
+            }
+            _managedAppsFlow.value = _managedAppsFlow.value.map { item ->
+                val updatedPaths = item.wakeUpDetails.paths.map { it.copy(isCut = false) }
+                item.copy(
+                    isRestrictedForeground = false,
+                    wakeUpDetails = item.wakeUpDetails.copy(paths = updatedPaths, isCut = false)
+                )
+            }
+            _statusMessage.value = "Reset all system AppOps to default. Apps will remember state normally!"
             refreshManagedAppsOnly(silent = true)
         }
     }

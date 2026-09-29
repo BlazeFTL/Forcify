@@ -187,16 +187,58 @@ object RootExecutor {
         }
     }
 
+    suspend fun executeScript(script: String): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val process = Runtime.getRuntime().exec("su")
+            val os = DataOutputStream(process.outputStream)
+            os.write(script.toByteArray(Charsets.UTF_8))
+            os.writeBytes("\nexit\n")
+            os.flush()
+
+            val reader = BufferedReader(InputStreamReader(process.inputStream))
+            val output = StringBuilder()
+            var line: String?
+            while (reader.readLine().also { line = it } != null) {
+                output.append(line).append("\n")
+            }
+            process.waitFor()
+            Result.success(output.toString().trim())
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun restoreWakeUps(packageName: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val cmds = listOf(
-                "cmd appops set $packageName RUN_IN_BACKGROUND allow",
-                "cmd appops set $packageName WAKE_LOCK allow",
-                "cmd appops set $packageName START_FOREGROUND allow"
-            )
-            for (cmd in cmds) {
-                executeCommand(cmd)
+            // Restore to standard Android system default (NOT allow, which forces apps to run unconstrained)
+            val script = """
+                cmd appops set $packageName RUN_IN_BACKGROUND default
+                cmd appops set $packageName RUN_ANY_IN_BACKGROUND default
+                cmd appops set $packageName WAKE_LOCK default
+                cmd appops set $packageName START_FOREGROUND default
+                cmd appops set $packageName SCHEDULE_EXACT_ALARM default
+                cmd appops set $packageName BOOT_COMPLETED default
+            """.trimIndent()
+            executeScript(script)
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun restoreWakeUpsBatch(packages: List<String>): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            if (packages.isEmpty()) return@withContext Result.success(Unit)
+            val sb = StringBuilder()
+            for (pkg in packages) {
+                sb.append("cmd appops set $pkg RUN_IN_BACKGROUND default\n")
+                sb.append("cmd appops set $pkg RUN_ANY_IN_BACKGROUND default\n")
+                sb.append("cmd appops set $pkg WAKE_LOCK default\n")
+                sb.append("cmd appops set $pkg START_FOREGROUND default\n")
+                sb.append("cmd appops set $pkg SCHEDULE_EXACT_ALARM default\n")
+                sb.append("cmd appops set $pkg BOOT_COMPLETED default\n")
             }
+            executeScript(sb.toString())
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -262,13 +304,13 @@ object RootExecutor {
                     executeCommand("pm enable ${path.componentName}")
                 }
                 com.example.model.WakeUpPathType.OP_WAKE_LOCK -> {
-                    executeCommand("cmd appops set ${path.packageName} WAKE_LOCK allow")
+                    executeCommand("cmd appops set ${path.packageName} WAKE_LOCK default")
                 }
                 com.example.model.WakeUpPathType.OP_RUN_IN_BACKGROUND -> {
-                    executeCommand("cmd appops set ${path.packageName} RUN_IN_BACKGROUND allow")
+                    executeCommand("cmd appops set ${path.packageName} RUN_IN_BACKGROUND default; cmd appops set ${path.packageName} RUN_ANY_IN_BACKGROUND default; cmd appops set ${path.packageName} START_FOREGROUND default")
                 }
                 com.example.model.WakeUpPathType.OP_SCHEDULED_ALARM -> {
-                    executeCommand("cmd appops set ${path.packageName} SCHEDULE_EXACT_ALARM allow")
+                    executeCommand("cmd appops set ${path.packageName} SCHEDULE_EXACT_ALARM default")
                 }
                 com.example.model.WakeUpPathType.BATTERY_OPTIMIZATION -> {
                     executeCommand("dumpsys deviceidle whitelist +${path.packageName}")

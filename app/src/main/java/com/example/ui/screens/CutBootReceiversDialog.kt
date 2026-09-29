@@ -439,12 +439,9 @@ private fun BootReceiverAppCard(
             )
             .clickable { onToggleSelect() },
         colors = CardDefaults.cardColors(
-            containerColor = if (isSelected)
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)
-            else
-                MaterialTheme.colorScheme.surface
+            containerColor = Color.White
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier
