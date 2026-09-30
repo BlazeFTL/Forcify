@@ -133,12 +133,14 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
     val systemRamOverview by viewModel.systemRamOverview.collectAsState()
     val appsRamList by viewModel.appsRamList.collectAsState()
     val isLoadingRam by viewModel.isLoadingRam.collectAsState()
+    val hideSystemAppsInRam by viewModel.hideSystemAppsInRam.collectAsState()
+    val hibernatedPackageNames by viewModel.hibernatedPackageNames.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
     var showMenu by remember { mutableStateOf(false) }
     var showModeDialog by remember { mutableStateOf(false) }
     var isSearchExpanded by remember { mutableStateOf(false) }
-    var isHibernatedSectionExpanded by remember { mutableStateOf(false) }
+    var isHibernatedSectionExpanded by remember { mutableStateOf(true) }
 
     // Multi-select for batch stopping requested by user
     var selectedPackagesForBatchStop by remember { mutableStateOf(setOf<String>()) }
@@ -648,6 +650,14 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                 )
             }
 
+            if (!isInitialScanCompleted && allManagedApps.isNotEmpty()) {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth().height(2.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = Color.Transparent
+                )
+            }
+
             // Main Content: Strictly running apps only, no stopped/hibernated lists cluttering the page!
             if (isLoading && allManagedApps.isEmpty()) {
                 Box(
@@ -672,47 +682,16 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                         onAddApps = { viewModel.openAddApps() }
                     )
                 }
-            } else if (filteredNotHibernating.isEmpty() && filteredWillHibernateSoon.isEmpty()) {
-                if (allManagedApps.isEmpty()) {
-                    if (viewModel.preferences.savedManagedPackages.isEmpty() && isInitialScanCompleted) {
-                        EmptyStateView(
-                            isSearchActive = searchQuery.isNotBlank(),
-                            onAddApps = { viewModel.openAddApps() }
-                        )
-                    }
-                } else if (!isInitialScanCompleted) {
-                    // Smooth initial scan in progress, do not flash empty state
-                    Box(
-                        modifier = Modifier.weight(1f).fillMaxWidth(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(36.dp), strokeWidth = 3.dp)
-                    }
-                } else if (searchQuery.isNotBlank() && filteredHibernated.isEmpty()) {
-                    Box(
-                        modifier = Modifier.weight(1f).fillMaxWidth(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "No apps match '$searchQuery'",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 14.sp
-                        )
-                    }
-                } else {
-                    // All managed apps are in hibernated state!
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        AllHibernatedCleanCard(
-                            managedCount = allManagedApps.size,
-                            onAddMore = { viewModel.openAddApps() }
-                        )
-                    }
+            } else if (searchQuery.isNotBlank() && filteredNotHibernating.isEmpty() && filteredWillHibernateSoon.isEmpty() && filteredHibernated.isEmpty()) {
+                Box(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "No apps match '$searchQuery'",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 14.sp
+                    )
                 }
             } else {
                 LazyColumn(
@@ -720,6 +699,56 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    // Celebration Banner when all apps are hibernated (ONLY show after real live scan confirms it!)
+                    if (isInitialScanCompleted && filteredNotHibernating.isEmpty() && filteredWillHibernateSoon.isEmpty() && allManagedApps.isNotEmpty() && searchQuery.isBlank()) {
+                        item {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                colors = CardDefaults.cardColors(containerColor = StateFree.copy(alpha = 0.08f)),
+                                shape = RoundedCornerShape(12.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, StateFree.copy(alpha = 0.25f))
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clip(CircleShape)
+                                            .background(StateFree),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = null,
+                                            tint = Color.White,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "All Apps Stopped & Hibernated",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "${allManagedApps.size} apps are background-free. Zero RAM or battery wasted.",
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // 1. NOT HIBERNATING AUTOMATICALLY SECTION
                     if (filteredNotHibernating.isNotEmpty()) {
                         item {
@@ -872,6 +901,7 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                                     app = app,
                                     isSelectionMode = isMultiSelectMode,
                                     isSelected = isSelected,
+                                    isHibernated = true,
                                     onToggleSelect = {
                                         selectedPackagesForBatchStop = if (isSelected) {
                                             selectedPackagesForBatchStop - app.packageName
@@ -979,6 +1009,9 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
         RamUsageBottomSheet(
             ramOverview = systemRamOverview,
             appsRamList = appsRamList,
+            hibernatedPackages = hibernatedPackageNames,
+            hideSystemApps = hideSystemAppsInRam,
+            onToggleHideSystemApps = { viewModel.setHideSystemAppsInRam(it) },
             isLoading = isLoadingRam,
             onDismiss = { viewModel.closeRamUsageDialog() },
             onRefresh = { viewModel.refreshRamUsage() },
@@ -1001,6 +1034,7 @@ private fun GreenifyStyleAppCard(
     app: InstalledAppItem,
     isSelectionMode: Boolean,
     isSelected: Boolean,
+    isHibernated: Boolean = false,
     onToggleSelect: () -> Unit,
     onLongClick: () -> Unit,
     onForceStop: () -> Unit,
@@ -1111,8 +1145,10 @@ private fun GreenifyStyleAppCard(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Stop Button on Right (single stop)
-            if (!isSelectionMode) {
+            val isActuallyHibernated = isHibernated || app.isStoppedState || app.state == AppState.BACKGROUND_FREE || app.stateDetail.equals("Hibernated", ignoreCase = true)
+
+            // Stop Button on Right: ONLY display for running/pending apps, NEVER for hibernated apps!
+            if (!isSelectionMode && !isActuallyHibernated) {
                 Button(
                     onClick = onForceStop,
                     modifier = Modifier
@@ -1137,7 +1173,9 @@ private fun GreenifyStyleAppCard(
                         fontWeight = FontWeight.Bold
                     )
                 }
+            }
 
+            if (!isSelectionMode) {
                 Box {
                     IconButton(onClick = { showItemMenu = true }) {
                         Icon(

@@ -21,8 +21,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.StopCircle
@@ -31,8 +34,14 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -58,12 +67,16 @@ import androidx.compose.ui.unit.sp
 import com.example.model.AppRamUsageItem
 import com.example.model.SystemRamOverview
 import com.example.ui.components.AppIconImage
+import com.example.ui.theme.StateFree
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RamUsageBottomSheet(
     ramOverview: SystemRamOverview,
     appsRamList: List<AppRamUsageItem>,
+    hibernatedPackages: Set<String> = emptySet(),
+    hideSystemApps: Boolean,
+    onToggleHideSystemApps: (Boolean) -> Unit,
     isLoading: Boolean,
     onDismiss: () -> Unit,
     onRefresh: () -> Unit,
@@ -71,15 +84,16 @@ fun RamUsageBottomSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var searchQuery by remember { mutableStateOf("") }
+    var showOptionsMenu by remember { mutableStateOf(false) }
 
-    val filteredList = remember(appsRamList, searchQuery) {
-        if (searchQuery.isBlank()) {
-            appsRamList
-        } else {
-            val q = searchQuery.trim().lowercase()
-            appsRamList.filter {
-                it.appName.lowercase().contains(q) || it.packageName.lowercase().contains(q)
+    val filteredList = remember(appsRamList, searchQuery, hideSystemApps) {
+        val q = searchQuery.trim().lowercase()
+        appsRamList.filter { item ->
+            val matchesSearch = if (q.isBlank()) true else {
+                item.appName.lowercase().contains(q) || item.packageName.lowercase().contains(q)
             }
+            val matchesSystem = if (hideSystemApps) !item.isSystemApp else true
+            matchesSearch && matchesSystem
         }
     }
 
@@ -138,6 +152,38 @@ fun RamUsageBottomSheet(
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                     } else {
                         Icon(imageVector = Icons.Default.Refresh, contentDescription = "Refresh")
+                    }
+                }
+                Box {
+                    IconButton(onClick = { showOptionsMenu = true }) {
+                        Icon(imageVector = Icons.Default.MoreVert, contentDescription = "Options")
+                    }
+                    DropdownMenu(
+                        expanded = showOptionsMenu,
+                        onDismissRequest = { showOptionsMenu = false },
+                        shape = RoundedCornerShape(12.dp),
+                        containerColor = Color.White
+                    ) {
+                        DropdownMenuItem(
+                            text = {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Hide system apps", fontSize = 13.sp)
+                                    Spacer(modifier = Modifier.width(16.dp))
+                                    Checkbox(
+                                        checked = hideSystemApps,
+                                        onCheckedChange = null,
+                                        colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary)
+                                    )
+                                }
+                            },
+                            onClick = {
+                                onToggleHideSystemApps(!hideSystemApps)
+                            }
+                        )
                     }
                 }
                 IconButton(onClick = onDismiss) {
@@ -267,7 +313,50 @@ fun RamUsageBottomSheet(
                 )
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Filter Chips: Hide System Apps & Count
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                FilterChip(
+                    selected = hideSystemApps,
+                    onClick = { onToggleHideSystemApps(!hideSystemApps) },
+                    label = {
+                        Text(
+                            text = "Hide system apps",
+                            fontSize = 12.sp,
+                            fontWeight = if (hideSystemApps) FontWeight.Bold else FontWeight.Medium
+                        )
+                    },
+                    leadingIcon = if (hideSystemApps) {
+                        {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    } else null,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                )
+
+                Text(
+                    text = "${filteredList.size} apps",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
 
             // List of Apps Sorted by RAM Usage
             if (filteredList.isEmpty()) {
@@ -294,8 +383,10 @@ fun RamUsageBottomSheet(
                     contentPadding = PaddingValues(vertical = 4.dp)
                 ) {
                     items(filteredList, key = { it.packageName }) { app ->
+                        val isHibernated = hibernatedPackages.contains(app.packageName)
                         AppRamItemCard(
                             app = app,
+                            isHibernated = isHibernated,
                             onStop = { onStopApp(app.packageName) }
                         )
                     }
@@ -308,6 +399,7 @@ fun RamUsageBottomSheet(
 @Composable
 private fun AppRamItemCard(
     app: AppRamUsageItem,
+    isHibernated: Boolean,
     onStop: () -> Unit
 ) {
     Card(
@@ -367,28 +459,54 @@ private fun AppRamItemCard(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Stop Button
-            Button(
-                onClick = onStop,
-                modifier = Modifier.height(32.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                ),
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.StopCircle,
-                    contentDescription = null,
-                    modifier = Modifier.size(14.dp)
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    text = "Stop",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
-                )
+            // Action on right: Hibernated apps NEVER have a stop button!
+            if (isHibernated) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(StateFree.copy(alpha = 0.12f))
+                        .border(1.dp, StateFree.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = StateFree,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Hibernated",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = StateFree
+                        )
+                    }
+                }
+            } else {
+                Button(
+                    onClick = onStop,
+                    modifier = Modifier.height(32.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.StopCircle,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Stop",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
     }

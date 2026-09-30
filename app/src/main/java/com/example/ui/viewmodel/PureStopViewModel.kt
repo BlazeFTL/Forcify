@@ -196,6 +196,18 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
     private val _showRamUsageDialog = MutableStateFlow(false)
     val showRamUsageDialog: StateFlow<Boolean> = _showRamUsageDialog.asStateFlow()
 
+    private val _hideSystemAppsInRam = MutableStateFlow(preferences.hideSystemAppsInRam)
+    val hideSystemAppsInRam: StateFlow<Boolean> = _hideSystemAppsInRam.asStateFlow()
+
+    fun setHideSystemAppsInRam(hide: Boolean) {
+        _hideSystemAppsInRam.value = hide
+        preferences.hideSystemAppsInRam = hide
+    }
+
+    val hibernatedPackageNames: StateFlow<Set<String>> = allManagedApps.map { list ->
+        list.filter { it.isStoppedState || it.state == AppState.BACKGROUND_FREE }.map { it.packageName }.toSet() + _manuallyStoppedPackages
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+
     private val _systemRamOverview = MutableStateFlow(detector.getSystemRamOverview())
     val systemRamOverview: StateFlow<SystemRamOverview> = _systemRamOverview.asStateFlow()
 
@@ -210,15 +222,24 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
     init {
         checkPermissions()
 
-        // Frame 0 instant pre-population from cached preferences so app opens with full states displayed (zero wait time & zero dynamic shift)
+        // Frame 0 pre-population of managed apps catalog without false initial scan completed flag
         val preloaded = loadPreloadedManagedApps()
         if (preloaded.isNotEmpty()) {
             _managedAppsFlow.value = preloaded
-            _isInitialScanCompleted.value = true
         }
 
+        // Dedicated fast coroutine to pre-warm RAM usage immediately on startup so opening RAM Usage is instant (0ms wait)
         viewModelScope.launch(Dispatchers.IO) {
-            // Proactively build installed apps catalog on startup so user has zero wait time on Add Apps
+            val isRoot = preferences.mode == OperatingMode.ROOT
+            val list = detector.getRunningAppsRamUsage(isRoot)
+            if (list.isNotEmpty()) {
+                _appsRamList.value = list
+                _systemRamOverview.value = detector.getSystemRamOverview()
+            }
+        }
+
+        // Secondary coroutine for installed apps catalog in Add Apps dialog
+        viewModelScope.launch(Dispatchers.IO) {
             loadInstalledAppsForAddDialog()
         }
 
@@ -401,13 +422,10 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                 val appInfo = pm.getApplicationInfo(pkg, 0)
                 val appName = preferences.getSavedAppName(pkg) ?: pm.getApplicationLabel(appInfo).toString()
                 val icon = AppIconCache.getOrLoad(getApplication(), appInfo)
-                val savedState = preferences.getSavedAppState(pkg) ?: AppState.BACKGROUND_RUNNING
-                val savedDetail = preferences.getSavedStateDetail(pkg) ?: (if (savedState == AppState.BACKGROUND_FREE) "Hibernated" else "Pending Hibernation")
+                val savedState = preferences.getSavedAppState(pkg) ?: AppState.CACHED
+                val savedDetail = preferences.getSavedStateDetail(pkg) ?: "Pending Hibernation"
                 val savedSecondary = preferences.getSavedSecondaryDetail(pkg) ?: ""
-                val isStopped = savedState == AppState.BACKGROUND_FREE
-                if (isStopped) {
-                    _manuallyStoppedPackages.add(pkg)
-                }
+                val isStopped = false
                 val isWorkingIgnored = preferences.isWorkingStateIgnored(pkg)
                 val isRestricted = preferences.isRestrictRunningAsForeground(pkg)
                 val (isUnsafe, unsafeReason) = detector.checkUnsafeToForceStop(pkg, appName)
@@ -899,7 +917,17 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
 
     fun openRamUsageDialog() {
         _showRamUsageDialog.value = true
-        refreshRamUsage()
+        if (_appsRamList.value.isEmpty()) {
+            refreshRamUsage()
+        } else {
+            // Already cached/pre-warmed! Silent fast update in background (0ms instant display!)
+            viewModelScope.launch(Dispatchers.IO) {
+                _systemRamOverview.value = detector.getSystemRamOverview()
+                val isRoot = preferences.mode == OperatingMode.ROOT
+                val list = detector.getRunningAppsRamUsage(isRoot, forceRefresh = true)
+                _appsRamList.value = list
+            }
+        }
     }
 
     fun closeRamUsageDialog() {
@@ -908,10 +936,12 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
 
     fun refreshRamUsage() {
         viewModelScope.launch(Dispatchers.IO) {
-            _isLoadingRam.value = true
+            if (_appsRamList.value.isEmpty()) {
+                _isLoadingRam.value = true
+            }
             _systemRamOverview.value = detector.getSystemRamOverview()
             val isRoot = preferences.mode == OperatingMode.ROOT
-            val list = detector.getRunningAppsRamUsage(isRoot)
+            val list = detector.getRunningAppsRamUsage(isRoot, forceRefresh = true)
             _appsRamList.value = list
             _isLoadingRam.value = false
         }
@@ -919,12 +949,16 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
 
     fun stopAppFromRam(packageName: String) {
         viewModelScope.launch(Dispatchers.IO) {
+            _manuallyStoppedPackages.add(packageName)
+            // Instant optimistic update on managed apps flow so it marks as hibernated immediately
+            _managedAppsFlow.value = _managedAppsFlow.value.map {
+                if (it.packageName == packageName) it.copy(state = AppState.BACKGROUND_FREE, stateDetail = "Hibernated", isStoppedState = true) else it
+            }
             val app = _managedAppsFlow.value.find { it.packageName == packageName }
                 ?: _allInstalledApps.value.find { it.packageName == packageName }
                 ?: InstalledAppItem(packageName = packageName, appName = packageName)
             engine.stopSingleApp(app)
-            _manuallyStoppedPackages.add(packageName)
-            delay(350)
+            delay(300)
             refreshRamUsage()
             refreshManagedAppsOnly(silent = true)
         }

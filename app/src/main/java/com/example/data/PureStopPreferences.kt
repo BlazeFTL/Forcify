@@ -50,6 +50,10 @@ class PureStopPreferences(context: Context) {
         get() = prefs.getBoolean("hide_system_apps_add_list", true)
         set(value) = prefs.edit().putBoolean("hide_system_apps_add_list", value).apply()
 
+    var hideSystemAppsInRam: Boolean
+        get() = prefs.getBoolean("hide_system_apps_in_ram", true)
+        set(value) = prefs.edit().putBoolean("hide_system_apps_in_ram", value).apply()
+
     var savedManagedPackages: Set<String>
         get() = prefs.getStringSet("saved_managed_packages", emptySet()) ?: emptySet()
         set(value) = prefs.edit().putStringSet("saved_managed_packages", value).apply()

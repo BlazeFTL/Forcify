@@ -965,7 +965,15 @@ class AppStatusDetector(private val context: Context) {
         }
     }
 
-    suspend fun getRunningAppsRamUsage(isRoot: Boolean): List<com.example.model.AppRamUsageItem> = withContext(Dispatchers.IO) {
+    private var cachedRamList: List<com.example.model.AppRamUsageItem> = emptyList()
+    private var lastRamFetchTime: Long = 0L
+
+    suspend fun getRunningAppsRamUsage(isRoot: Boolean, forceRefresh: Boolean = false): List<com.example.model.AppRamUsageItem> = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        if (!forceRefresh && cachedRamList.isNotEmpty() && (now - lastRamFetchTime < 30_000L)) {
+            return@withContext cachedRamList
+        }
+
         val result = mutableMapOf<String, com.example.model.AppRamUsageItem>()
         val pm = context.packageManager
         val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
@@ -1003,7 +1011,11 @@ class AppStatusDetector(private val context: Context) {
                                 val appInfo = pm.getApplicationInfo(pkg, 0)
                                 val appName = pm.getApplicationLabel(appInfo).toString()
                                 val icon = com.example.util.AppIconCache.getOrLoad(context, appInfo)
-                                val isSys = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+                                val isSys = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0 ||
+                                    pkg.startsWith("com.android.") ||
+                                    pkg.startsWith("com.google.android.gms") ||
+                                    pkg.startsWith("com.google.android.gsf") ||
+                                    pkg == "android"
 
                                 val existing = result[pkg]
                                 val combinedPss = (existing?.pssKb ?: 0L) + pssKb
@@ -1026,47 +1038,59 @@ class AppStatusDetector(private val context: Context) {
             }
         }
 
-        // 2. ActivityManager RunningAppProcessInfo for any remaining or non-root
-        try {
-            val procs = am.runningAppProcesses ?: emptyList()
-            val missingPids = procs.filter { proc ->
-                proc.pkgList?.any { !result.containsKey(it) } == true
-            }
-            if (missingPids.isNotEmpty()) {
-                val pidsArray = missingPids.map { it.pid }.toIntArray()
-                val memInfos = am.getProcessMemoryInfo(pidsArray)
-                for (i in missingPids.indices) {
-                    val proc = missingPids[i]
-                    val pssKb = memInfos.getOrNull(i)?.totalPss?.toLong() ?: 0L
-                    val pkgs = proc.pkgList ?: continue
-                    for (pkg in pkgs) {
-                        if (pkg in setOf("system", "android")) continue
-                        if (!result.containsKey(pkg)) {
-                            try {
-                                val appInfo = pm.getApplicationInfo(pkg, 0)
-                                val appName = pm.getApplicationLabel(appInfo).toString()
-                                val icon = com.example.util.AppIconCache.getOrLoad(context, appInfo)
-                                val isSys = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
-                                result[pkg] = com.example.model.AppRamUsageItem(
-                                    packageName = pkg,
-                                    appName = appName,
-                                    icon = icon,
-                                    pssKb = pssKb,
-                                    pid = proc.pid,
-                                    isSystemApp = isSys
-                                )
-                            } catch (e: Exception) {
-                                // Package not found
+        // 2. ActivityManager RunningAppProcessInfo for non-root or if root yielded no results
+        if (result.isEmpty()) {
+            try {
+                val procs = am.runningAppProcesses ?: emptyList()
+                val targetProcs = procs.filter { proc ->
+                    proc.pkgList?.any { pkg ->
+                        pkg != "system" && pkg != "android" && !result.containsKey(pkg)
+                    } == true
+                }.take(60)
+
+                if (targetProcs.isNotEmpty()) {
+                    val pidsArray = targetProcs.map { it.pid }.toIntArray()
+                    val memInfos = am.getProcessMemoryInfo(pidsArray)
+                    for (i in targetProcs.indices) {
+                        val proc = targetProcs[i]
+                        val pssKb = memInfos.getOrNull(i)?.totalPss?.toLong() ?: 0L
+                        val pkgs = proc.pkgList ?: continue
+                        for (pkg in pkgs) {
+                            if (pkg in setOf("system", "android")) continue
+                            if (!result.containsKey(pkg)) {
+                                try {
+                                    val appInfo = pm.getApplicationInfo(pkg, 0)
+                                    val appName = pm.getApplicationLabel(appInfo).toString()
+                                    val icon = com.example.util.AppIconCache.getOrLoad(context, appInfo)
+                                    val isSys = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0 ||
+                                        pkg.startsWith("com.android.") ||
+                                        pkg.startsWith("com.google.android.gms") ||
+                                        pkg.startsWith("com.google.android.gsf") ||
+                                        pkg == "android"
+                                    result[pkg] = com.example.model.AppRamUsageItem(
+                                        packageName = pkg,
+                                        appName = appName,
+                                        icon = icon,
+                                        pssKb = pssKb,
+                                        pid = proc.pid,
+                                        isSystemApp = isSys
+                                    )
+                                } catch (e: Exception) {
+                                    // Package not found
+                                }
                             }
                         }
                     }
                 }
+            } catch (e: Exception) {
+                // Ignore
             }
-        } catch (e: Exception) {
-            // Ignore
         }
 
-        result.values.toList().sortedByDescending { it.pssKb }
+        val finalSorted = result.values.toList().sortedByDescending { it.pssKb }
+        cachedRamList = finalSorted
+        lastRamFetchTime = now
+        finalSorted
     }
 }
 
