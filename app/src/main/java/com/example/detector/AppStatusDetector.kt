@@ -977,59 +977,110 @@ class AppStatusDetector(private val context: Context) {
         val result = mutableMapOf<String, com.example.model.AppRamUsageItem>()
         val pm = context.packageManager
         val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val myPackage = context.packageName
 
-        // 1. Try dumpsys meminfo in Root mode
+        // 1. In Root mode: run ps -A and dumpsys meminfo --oom to reliably detect all running processes & RAM
         if (isRoot) {
+            // Fast ps -A to get all processes running across the system (15ms)
             try {
-                val res = com.example.engine.RootExecutor.executeCommand("dumpsys meminfo -s")
-                val output = res.getOrNull() ?: ""
-                var inProcessSection = false
-                val regex = Regex("""^\s*([0-9,]+)K:\s+([a-zA-Z0-9._]+)(?:\s+\(pid\s+(\d+)\))?""")
+                val psRes = com.example.engine.RootExecutor.executeCommand("ps -A")
+                val psOut = psRes.getOrNull() ?: ""
+                var pidCol = 1
+                var rssCol = 4
 
-                for (line in output.lines()) {
-                    if (line.contains("Total PSS by process:")) {
-                        inProcessSection = true
+                for (line in psOut.lines()) {
+                    val parts = line.trim().split(Regex("""\s+"""))
+                    if (parts.size < 4) continue
+                    val pidIdx = parts.indexOfFirst { it.equals("PID", ignoreCase = true) }
+                    val rssIdx = parts.indexOfFirst { it.equals("RSS", ignoreCase = true) }
+                    val vszIdx = parts.indexOfFirst { it.equals("VSZ", ignoreCase = true) || it.equals("VSIZE", ignoreCase = true) }
+
+                    if (pidIdx != -1 && (rssIdx != -1 || vszIdx != -1)) {
+                        pidCol = pidIdx
+                        rssCol = if (rssIdx != -1) rssIdx else vszIdx
                         continue
                     }
-                    if (inProcessSection && (line.contains("Total PSS by category:") || line.contains("Total PSS by OOM adjustment:"))) {
-                        break
+                    val procName = parts.last()
+                    val pkg = procName.substringBefore(':')
+                    if (!pkg.contains('.') || pkg.startsWith("/") || pkg == myPackage) continue
+                    if (pkg in setOf("system", "zygote", "zygote64", "surfaceflinger", "audioserver", "cameraserver", "mediaserver", "adbd", "init", "logd", "vold", "netd")) continue
+
+                    val pid = parts.getOrNull(pidCol)?.toIntOrNull() ?: 0
+                    val rssKb = parts.getOrNull(rssCol)?.toLongOrNull() ?: 0L
+                    if (rssKb <= 0L) continue
+
+                    try {
+                        val appInfo = pm.getApplicationInfo(pkg, 0)
+                        val appName = pm.getApplicationLabel(appInfo).toString()
+                        val icon = com.example.util.AppIconCache.getOrLoad(context, appInfo)
+                        val isSys = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0 ||
+                            pkg.startsWith("com.android.") ||
+                            pkg.startsWith("com.google.android.gms") ||
+                            pkg.startsWith("com.google.android.gsf") ||
+                            pkg == "android"
+
+                        val existing = result[pkg]
+                        val combined = (existing?.pssKb ?: 0L) + rssKb
+                        result[pkg] = com.example.model.AppRamUsageItem(
+                            packageName = pkg,
+                            appName = appName,
+                            icon = icon,
+                            pssKb = combined,
+                            pid = if (pid != 0) pid else existing?.pid ?: 0,
+                            isSystemApp = isSys
+                        )
+                    } catch (e: Exception) {
+                        // Non-installed process
                     }
-                    if (inProcessSection) {
-                        val match = regex.find(line)
-                        if (match != null) {
-                            val kbStr = match.groupValues[1].replace(",", "")
-                            val pssKb = kbStr.toLongOrNull() ?: 0L
-                            val procName = match.groupValues[2]
-                            val pid = match.groupValues.getOrNull(3)?.toIntOrNull() ?: 0
-                            val pkg = procName.substringBefore(':')
+                }
+            } catch (e: Exception) {
+                // Ignore ps error
+            }
 
-                            if (pkg in setOf("system", "zygote", "zygote64", "surfaceflinger", "audioserver", "cameraserver", "mediaserver", "adbd", "init", "logd", "vold", "netd")) {
-                                continue
-                            }
+            // Accurate PSS memory from dumpsys meminfo --oom (with fallback to dumpsys meminfo)
+            try {
+                var res = com.example.engine.RootExecutor.executeCommand("dumpsys meminfo --oom")
+                var output = res.getOrNull() ?: ""
+                if (output.isEmpty() || output.contains("Unknown") || !output.contains("K:")) {
+                    res = com.example.engine.RootExecutor.executeCommand("dumpsys meminfo")
+                    output = res.getOrNull() ?: ""
+                }
+                val regex = Regex("""^\s*([0-9,]+)K:\s+([a-zA-Z0-9._]+)(?::[a-zA-Z0-9._]+)?(?:\s*\(pid\s+(\d+))?""")
 
-                            try {
-                                val appInfo = pm.getApplicationInfo(pkg, 0)
-                                val appName = pm.getApplicationLabel(appInfo).toString()
-                                val icon = com.example.util.AppIconCache.getOrLoad(context, appInfo)
-                                val isSys = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0 ||
-                                    pkg.startsWith("com.android.") ||
-                                    pkg.startsWith("com.google.android.gms") ||
-                                    pkg.startsWith("com.google.android.gsf") ||
-                                    pkg == "android"
+                for (line in output.lines()) {
+                    val match = regex.find(line)
+                    if (match != null) {
+                        val kbStr = match.groupValues[1].replace(",", "")
+                        val pssKb = kbStr.toLongOrNull() ?: 0L
+                        val pkg = match.groupValues[2]
+                        val pid = match.groupValues.getOrNull(3)?.toIntOrNull() ?: 0
 
-                                val existing = result[pkg]
-                                val combinedPss = (existing?.pssKb ?: 0L) + pssKb
-                                result[pkg] = com.example.model.AppRamUsageItem(
-                                    packageName = pkg,
-                                    appName = appName,
-                                    icon = icon,
-                                    pssKb = combinedPss,
-                                    pid = if (pid != 0) pid else existing?.pid ?: 0,
-                                    isSystemApp = isSys
-                                )
-                            } catch (e: Exception) {
-                                // Non-app process
-                            }
+                        if (pkg == myPackage) continue
+                        if (pkg in setOf("system", "zygote", "zygote64", "surfaceflinger", "audioserver", "cameraserver", "mediaserver", "adbd", "init", "logd", "vold", "netd")) {
+                            continue
+                        }
+
+                        try {
+                            val appInfo = pm.getApplicationInfo(pkg, 0)
+                            val appName = pm.getApplicationLabel(appInfo).toString()
+                            val icon = com.example.util.AppIconCache.getOrLoad(context, appInfo)
+                            val isSys = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0 ||
+                                pkg.startsWith("com.android.") ||
+                                pkg.startsWith("com.google.android.gms") ||
+                                pkg.startsWith("com.google.android.gsf") ||
+                                pkg == "android"
+
+                            val existing = result[pkg]
+                            result[pkg] = com.example.model.AppRamUsageItem(
+                                packageName = pkg,
+                                appName = appName,
+                                icon = icon,
+                                pssKb = pssKb,
+                                pid = if (pid != 0) pid else existing?.pid ?: 0,
+                                isSystemApp = isSys
+                            )
+                        } catch (e: Exception) {
+                            // Non-app process
                         }
                     }
                 }
@@ -1044,7 +1095,7 @@ class AppStatusDetector(private val context: Context) {
                 val procs = am.runningAppProcesses ?: emptyList()
                 val targetProcs = procs.filter { proc ->
                     proc.pkgList?.any { pkg ->
-                        pkg != "system" && pkg != "android" && !result.containsKey(pkg)
+                        pkg != "system" && pkg != "android" && pkg != myPackage && !result.containsKey(pkg)
                     } == true
                 }.take(60)
 
@@ -1056,7 +1107,7 @@ class AppStatusDetector(private val context: Context) {
                         val pssKb = memInfos.getOrNull(i)?.totalPss?.toLong() ?: 0L
                         val pkgs = proc.pkgList ?: continue
                         for (pkg in pkgs) {
-                            if (pkg in setOf("system", "android")) continue
+                            if (pkg in setOf("system", "android") || pkg == myPackage) continue
                             if (!result.containsKey(pkg)) {
                                 try {
                                     val appInfo = pm.getApplicationInfo(pkg, 0)

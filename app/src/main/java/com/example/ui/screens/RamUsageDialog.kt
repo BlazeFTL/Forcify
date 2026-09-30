@@ -370,7 +370,7 @@ fun RamUsageBottomSheet(
                         CircularProgressIndicator(strokeWidth = 2.dp)
                     } else {
                         Text(
-                            text = "No active running processes found",
+                            text = if (appsRamList.isNotEmpty() && hideSystemApps) "No user apps running (all active processes are system)" else "No active running processes found",
                             fontSize = 13.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
