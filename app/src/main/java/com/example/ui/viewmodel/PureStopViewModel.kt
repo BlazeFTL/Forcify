@@ -640,13 +640,20 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                 val list = mutableListOf<com.example.detector.BootReceiverItem>()
                 val managedPkgs = preferences.savedManagedPackages
 
+                // Accurately query actual registered boot receivers via Android PackageManager
+                val allBootReceiversMap = detector.getAllBootReceiversMap()
+
                 for (pkgInfo in packages) {
                     val appInfo = pkgInfo.applicationInfo ?: continue
                     val isSystem = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
                     val hasBootPerm = pkgInfo.requestedPermissions?.contains("android.permission.RECEIVE_BOOT_COMPLETED") == true
-                    val bootComponents = detector.getBootReceiversForPackage(pkgInfo)
+                    val bootComponents = allBootReceiversMap[pkgInfo.packageName]
+                        ?: detector.getActualBootReceiversForPackage(pkgInfo.packageName)
 
-                    if (hasBootPerm || bootComponents.isNotEmpty()) {
+                    // A package ONLY has boot receivers if it actually contains receiver components
+                    // registered for BOOT_COMPLETED in AndroidManifest. If <intent-filter> was removed,
+                    // the app will not start on boot and should not be shown as having boot receivers.
+                    if (bootComponents.isNotEmpty()) {
                         val appName = try {
                             pm.getApplicationLabel(appInfo).toString()
                         } catch (e: Exception) {
@@ -693,10 +700,11 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                     val item = _bootReceiverApps.value.find { it.packageName == pkg }
                     if (item != null && item.bootReceiverComponents.isNotEmpty()) {
                         for (comp in item.bootReceiverComponents) {
+                            val formattedComp = if (comp.contains("/")) comp else "$pkg/$comp"
                             if (cut) {
-                                RootExecutor.executeCommand("pm disable $comp")
+                                RootExecutor.executeCommand("pm disable $formattedComp")
                             } else {
-                                RootExecutor.executeCommand("pm enable $comp")
+                                RootExecutor.executeCommand("pm enable $formattedComp")
                             }
                         }
                     }

@@ -301,8 +301,9 @@ object RootExecutor {
                 com.example.model.WakeUpPathType.SERVICE_BACKGROUND,
                 com.example.model.WakeUpPathType.SERVICE_FOREGROUND,
                 com.example.model.WakeUpPathType.SERVICE_JOB -> {
-                    // Disable specific component at system level using pm disable
-                    executeCommand("pm disable ${path.componentName}")
+                    // Disable specific component at system level using pm disable (requires pkg/component)
+                    val comp = if (path.componentName.contains("/")) path.componentName else "${path.packageName}/${path.componentName}"
+                    executeCommand("pm disable $comp")
                 }
                 com.example.model.WakeUpPathType.OP_WAKE_LOCK -> {
                     executeCommand("cmd appops set ${path.packageName} WAKE_LOCK ignore")
@@ -340,7 +341,8 @@ object RootExecutor {
                 com.example.model.WakeUpPathType.SERVICE_BACKGROUND,
                 com.example.model.WakeUpPathType.SERVICE_FOREGROUND,
                 com.example.model.WakeUpPathType.SERVICE_JOB -> {
-                    executeCommand("pm enable ${path.componentName}")
+                    val comp = if (path.componentName.contains("/")) path.componentName else "${path.packageName}/${path.componentName}"
+                    executeCommand("pm enable $comp")
                 }
                 com.example.model.WakeUpPathType.OP_WAKE_LOCK -> {
                     executeCommand("cmd appops set ${path.packageName} WAKE_LOCK default")

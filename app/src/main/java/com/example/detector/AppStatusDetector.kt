@@ -5,6 +5,7 @@ import android.app.AppOpsManager
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
@@ -658,15 +659,19 @@ class AppStatusDetector(private val context: Context) {
 
         // 3. Broadcast Receivers (Filter out noise, highlight real autostart culprits)
         val receivers = pkgInfo.receivers ?: emptyArray()
+        val actualBootReceivers = getActualBootReceiversForPackage(pkg).toSet()
+        val recordedBootComponents = mutableSetOf<String>()
+
         for (receiver in receivers) {
             val simpleName = receiver.name.substringAfterLast('.')
             val fullName = if (receiver.name.startsWith(".")) "$pkg${receiver.name}" else receiver.name
             val id = "$pkg:receiver:$fullName"
             val isCut = isAppCut || cutPathIds.contains(id)
 
-            val isBoot = simpleName.contains("Boot", ignoreCase = true) ||
-                simpleName.contains("Startup", ignoreCase = true) ||
-                simpleName.contains("Reboot", ignoreCase = true)
+            // Strictly check if component is an actual registered boot receiver
+            val isBoot = actualBootReceivers.contains(fullName) ||
+                actualBootReceivers.contains(receiver.name) ||
+                actualBootReceivers.any { it.endsWith(".${simpleName}") || it == fullName }
 
             val isNetwork = simpleName.contains("Network", ignoreCase = true) ||
                 simpleName.contains("Connectivity", ignoreCase = true) ||
@@ -695,13 +700,15 @@ class AppStatusDetector(private val context: Context) {
                 simpleName.contains("Notification", ignoreCase = true)
 
             if (isBoot) {
+                recordedBootComponents.add(fullName)
+                val targetComp = if (fullName.contains("/")) fullName else "$pkg/$fullName"
                 list.add(
                     WakeUpPath(
                         id = id,
                         packageName = pkg,
                         type = WakeUpPathType.RECEIVER_BOOT,
                         title = "Boot Autostart ($simpleName)",
-                        componentName = fullName,
+                        componentName = targetComp,
                         reason = "Automatically launches app immediately when the phone powers on or restarts",
                         riskLevel = WakeUpRiskLevel.SAFE,
                         riskExplanation = "Safe to cut: completely prevents app from starting up on reboot",
@@ -803,26 +810,28 @@ class AppStatusDetector(private val context: Context) {
             }
         }
 
-        // If RECEIVE_BOOT_COMPLETED is declared but no specific receiver caught above
-        if (pkgInfo.requestedPermissions?.contains("android.permission.RECEIVE_BOOT_COMPLETED") == true &&
-            list.none { it.type == WakeUpPathType.RECEIVER_BOOT }
-        ) {
-            val id = "$pkg:perm:boot"
-            list.add(
-                WakeUpPath(
-                    id = id,
-                    packageName = pkg,
-                    type = WakeUpPathType.RECEIVER_BOOT,
-                    title = "Boot Permission",
-                    componentName = "android.permission.RECEIVE_BOOT_COMPLETED",
-                    reason = "Allows app to start automatically upon device boot",
-                    riskLevel = WakeUpRiskLevel.SAFE,
-                    riskExplanation = "Safe to cut: blocks boot autostart permission",
-                    isPrimaryCulprit = true,
-                    wakeupCount = 1,
-                    isCut = isAppCut || cutPathIds.contains(id)
+        // Add any actual boot receivers detected via PackageManager that weren't in pkgInfo.receivers array
+        for (bootComp in actualBootReceivers) {
+            val simpleName = bootComp.substringAfterLast('.')
+            if (!recordedBootComponents.contains(bootComp) && !recordedBootComponents.contains(simpleName)) {
+                val targetComp = if (bootComp.contains("/")) bootComp else "$pkg/$bootComp"
+                val id = "$pkg:receiver:$bootComp"
+                list.add(
+                    WakeUpPath(
+                        id = id,
+                        packageName = pkg,
+                        type = WakeUpPathType.RECEIVER_BOOT,
+                        title = "Boot Autostart ($simpleName)",
+                        componentName = targetComp,
+                        reason = "Automatically launches app immediately when the phone powers on or restarts",
+                        riskLevel = WakeUpRiskLevel.SAFE,
+                        riskExplanation = "Safe to cut: completely prevents app from starting up on reboot",
+                        isPrimaryCulprit = true,
+                        wakeupCount = 1,
+                        isCut = isAppCut || cutPathIds.contains(id)
+                    )
                 )
-            )
+            }
         }
 
         // 4. Permissions & Schedulers
@@ -922,22 +931,79 @@ class AppStatusDetector(private val context: Context) {
         map
     }
 
-    fun getBootReceiversForPackage(pkgInfo: PackageInfo): List<String> {
-        val bootComponents = mutableListOf<String>()
-        val receivers = pkgInfo.receivers ?: return bootComponents
-        for (receiver in receivers) {
-            val simpleName = receiver.name.substringAfterLast('.')
-            val fullName = receiver.name
-            if (simpleName.contains("Boot", ignoreCase = true) ||
-                simpleName.contains("Startup", ignoreCase = true) ||
-                simpleName.contains("Reboot", ignoreCase = true) ||
-                fullName.contains("boot", ignoreCase = true) ||
-                fullName.contains("startup", ignoreCase = true)
-            ) {
-                bootComponents.add(fullName)
+    fun getActualBootReceiversForPackage(packageName: String): List<String> {
+        val bootActions = listOf(
+            Intent.ACTION_BOOT_COMPLETED,
+            "android.intent.action.LOCKED_BOOT_COMPLETED",
+            "android.intent.action.QUICKBOOT_POWERON",
+            "com.htc.intent.action.QUICKBOOT_POWERON"
+        )
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            PackageManager.MATCH_ALL or PackageManager.MATCH_DIRECT_BOOT_AWARE or PackageManager.MATCH_DIRECT_BOOT_UNAWARE or PackageManager.MATCH_DISABLED_COMPONENTS
+        } else {
+            PackageManager.MATCH_ALL or PackageManager.MATCH_DISABLED_COMPONENTS
+        }
+
+        val results = mutableSetOf<String>()
+        for (action in bootActions) {
+            try {
+                val intent = Intent(action).setPackage(packageName)
+                val resolves = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    packageManager.queryBroadcastReceivers(intent, PackageManager.ResolveInfoFlags.of(flags.toLong()))
+                } else {
+                    @Suppress("DEPRECATION")
+                    packageManager.queryBroadcastReceivers(intent, flags)
+                }
+                for (resolve in resolves) {
+                    val compName = resolve.activityInfo?.name ?: continue
+                    val fullComp = if (compName.startsWith(".")) "$packageName$compName" else compName
+                    results.add(fullComp)
+                }
+            } catch (e: Exception) {
+                // Ignore
             }
         }
-        return bootComponents
+        return results.toList()
+    }
+
+    fun getAllBootReceiversMap(): Map<String, List<String>> {
+        val map = mutableMapOf<String, MutableSet<String>>()
+        val bootActions = listOf(
+            Intent.ACTION_BOOT_COMPLETED,
+            "android.intent.action.LOCKED_BOOT_COMPLETED",
+            "android.intent.action.QUICKBOOT_POWERON",
+            "com.htc.intent.action.QUICKBOOT_POWERON"
+        )
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            PackageManager.MATCH_ALL or PackageManager.MATCH_DIRECT_BOOT_AWARE or PackageManager.MATCH_DIRECT_BOOT_UNAWARE or PackageManager.MATCH_DISABLED_COMPONENTS
+        } else {
+            PackageManager.MATCH_ALL or PackageManager.MATCH_DISABLED_COMPONENTS
+        }
+
+        for (action in bootActions) {
+            try {
+                val intent = Intent(action)
+                val resolves = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    packageManager.queryBroadcastReceivers(intent, PackageManager.ResolveInfoFlags.of(flags.toLong()))
+                } else {
+                    @Suppress("DEPRECATION")
+                    packageManager.queryBroadcastReceivers(intent, flags)
+                }
+                for (resolve in resolves) {
+                    val pkg = resolve.activityInfo?.packageName ?: continue
+                    val compName = resolve.activityInfo?.name ?: continue
+                    val fullComp = if (compName.startsWith(".")) "$pkg$compName" else compName
+                    map.getOrPut(pkg) { mutableSetOf() }.add(fullComp)
+                }
+            } catch (e: Exception) {
+                // Ignore
+            }
+        }
+        return map.mapValues { it.value.toList() }
+    }
+
+    fun getBootReceiversForPackage(pkgInfo: PackageInfo): List<String> {
+        return getActualBootReceiversForPackage(pkgInfo.packageName)
     }
 
     private fun fallbackAppItem(pkg: String) = InstalledAppItem(
