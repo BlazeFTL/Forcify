@@ -17,8 +17,10 @@ import com.example.detector.AppStatusDetector
 import com.example.engine.ForceStopEngine
 import com.example.engine.RootExecutor
 import com.example.model.AppState
+import com.example.model.AppRamUsageItem
 import com.example.model.BatchFreezeProgress
 import com.example.model.InstalledAppItem
+import com.example.model.SystemRamOverview
 import com.example.model.WakeUpPath
 import com.example.model.WakeUpRiskLevel
 import com.example.service.ForceStopAccessibilityService
@@ -119,36 +121,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
         val app = getApplication<Application>()
         AppIconCache.preloadFromDisk(app, savedPkgs)
 
-        val savedPendingPkgs = preferences.savedPendingPackages
-        val list = mutableListOf<InstalledAppItem>()
-
-        for (pkg in savedPkgs) {
-            val appName = preferences.getSavedAppName(pkg) ?: pkg
-            val icon = AppIconCache.get(pkg) ?: AppIconCache.getOrLoad(app, pkg)
-            val isPending = savedPendingPkgs.contains(pkg) || savedPendingPkgs.isEmpty()
-            val isRestricted = preferences.isRestrictRunningAsForeground(pkg)
-            val isWorkingIgnored = preferences.isWorkingStateIgnored(pkg)
-
-            val sub = mutableListOf<String>()
-            if (isWorkingIgnored) sub.add("Ignored running state")
-            if (isRestricted) sub.add("Restricted running as foreground")
-
-            list.add(
-                InstalledAppItem(
-                    packageName = pkg,
-                    appName = appName,
-                    icon = icon,
-                    state = if (isPending) AppState.CACHED else AppState.BACKGROUND_FREE,
-                    stateDetail = if (isPending) "Pending Hibernation" else "Hibernated",
-                    secondaryDetail = sub.joinToString("\n"),
-                    isManaged = true,
-                    isRestrictedForeground = isRestricted,
-                    ignoreWorkingState = isWorkingIgnored,
-                    isStoppedState = !isPending
-                )
-            )
-        }
-        return list
+        return loadPreloadedManagedApps()
     }
 
     // Dedicated fast managed apps flow populated directly from cache on line 1 (< 0.2ms)
@@ -219,6 +192,18 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
 
     private val _isLoadingBootReceivers = MutableStateFlow(false)
     val isLoadingBootReceivers: StateFlow<Boolean> = _isLoadingBootReceivers.asStateFlow()
+
+    private val _showRamUsageDialog = MutableStateFlow(false)
+    val showRamUsageDialog: StateFlow<Boolean> = _showRamUsageDialog.asStateFlow()
+
+    private val _systemRamOverview = MutableStateFlow(detector.getSystemRamOverview())
+    val systemRamOverview: StateFlow<SystemRamOverview> = _systemRamOverview.asStateFlow()
+
+    private val _appsRamList = MutableStateFlow<List<AppRamUsageItem>>(emptyList())
+    val appsRamList: StateFlow<List<AppRamUsageItem>> = _appsRamList.asStateFlow()
+
+    private val _isLoadingRam = MutableStateFlow(false)
+    val isLoadingRam: StateFlow<Boolean> = _isLoadingRam.asStateFlow()
 
     private var liveMonitoringJob: Job? = null
 
@@ -420,6 +405,9 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                 val savedDetail = preferences.getSavedStateDetail(pkg) ?: (if (savedState == AppState.BACKGROUND_FREE) "Hibernated" else "Pending Hibernation")
                 val savedSecondary = preferences.getSavedSecondaryDetail(pkg) ?: ""
                 val isStopped = savedState == AppState.BACKGROUND_FREE
+                if (isStopped) {
+                    _manuallyStoppedPackages.add(pkg)
+                }
                 val isWorkingIgnored = preferences.isWorkingStateIgnored(pkg)
                 val isRestricted = preferences.isRestrictRunningAsForeground(pkg)
                 val (isUnsafe, unsafeReason) = detector.checkUnsafeToForceStop(pkg, appName)
@@ -492,8 +480,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                         val rootState = rootProcessMap[entity.packageName]
                         val runningProc = runningMap[entity.packageName]
                         val isFlagStopped = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_STOPPED) != 0
-                        val isRunning = (rootState?.isRunning == true) || (runningProc != null)
-                        val isStoppedState = isFlagStopped && !isRunning
+                        val isRecentlyStopped = _manuallyStoppedPackages.contains(entity.packageName)
 
                         val (isUnsafe, unsafeReason) = detector.checkUnsafeToForceStop(entity.packageName, appName)
 
@@ -507,6 +494,15 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                         val isFgService = (rootState?.isForegroundService == true) ||
                             (runningProc?.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE) ||
                             (runningProc?.importance == 125)
+
+                        val hasActiveService = (rootState?.hasActiveService == true) ||
+                            (runningProc != null && runningProc.importance <= android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_SERVICE && runningProc.importance > android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE)
+
+                        if (isTopForeground) {
+                            _manuallyStoppedPackages.remove(entity.packageName)
+                        }
+
+                        val isStoppedState = (isFlagStopped || isRecentlyStopped) && !isTopForeground && !isFgService && !isAccessibilityActive
 
                         val (state, stateDetail, secondaryDetail) = if (isStoppedState) {
                             Triple(AppState.BACKGROUND_FREE, "Hibernated", "")
@@ -524,7 +520,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                             if (isWorkingIgnored) sub.add("Ignored running state")
                             if (showRestrictedForeground) sub.add("Restricted running as foreground")
                             Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", sub.joinToString("\n"))
-                        } else if (isRunning) {
+                        } else if (hasActiveService) {
                             val sub = mutableListOf<String>()
                             if (isWorkingIgnored) sub.add("Ignored running state")
                             if (showRestrictedForeground) sub.add("Restricted running as foreground")
@@ -547,7 +543,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                                 state = state,
                                 stateDetail = stateDetail,
                                 secondaryDetail = secondaryDetail,
-                                processImportance = runningProc?.importance ?: (if (isRunning) 200 else 1000),
+                                processImportance = runningProc?.importance ?: (if (state != AppState.BACKGROUND_FREE) 200 else 1000),
                                 pid = rootState?.pid ?: runningProc?.pid,
                                 isSystemApp = entity.isSystemApp,
                                 isManaged = true,
@@ -828,6 +824,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
 
     fun forceStopSingle(app: InstalledAppItem) {
         viewModelScope.launch {
+            _manuallyStoppedPackages.add(app.packageName)
             // Instant optimistic update so it marks as hibernated cleanly immediately (0ms feedback!)
             _managedAppsFlow.value = _managedAppsFlow.value.map {
                 if (it.packageName == app.packageName) it.copy(state = AppState.BACKGROUND_FREE, stateDetail = "Hibernated", isStoppedState = true) else it
@@ -859,8 +856,9 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                 return@launch
             }
 
-            // Optimistic update: mark candidates as stopped immediately
             val runningPkgs = candidates.map { it.packageName }.toSet()
+            _manuallyStoppedPackages.addAll(runningPkgs)
+            // Optimistic update: mark candidates as stopped immediately
             _managedAppsFlow.value = _managedAppsFlow.value.map {
                 if (runningPkgs.contains(it.packageName)) it.copy(state = AppState.BACKGROUND_FREE, stateDetail = "Hibernated", isStoppedState = true) else it
             }
@@ -884,6 +882,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             if (apps.isEmpty()) return@launch
             val pkgs = apps.map { it.packageName }.toSet()
+            _manuallyStoppedPackages.addAll(pkgs)
             _managedAppsFlow.value = _managedAppsFlow.value.map {
                 if (pkgs.contains(it.packageName)) it.copy(state = AppState.BACKGROUND_FREE, stateDetail = "Hibernated", isStoppedState = true) else it
             }
@@ -895,6 +894,39 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                 }
             }
             _statusMessage.value = "Force stopping ${apps.size} selected app(s)..."
+        }
+    }
+
+    fun openRamUsageDialog() {
+        _showRamUsageDialog.value = true
+        refreshRamUsage()
+    }
+
+    fun closeRamUsageDialog() {
+        _showRamUsageDialog.value = false
+    }
+
+    fun refreshRamUsage() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _isLoadingRam.value = true
+            _systemRamOverview.value = detector.getSystemRamOverview()
+            val isRoot = preferences.mode == OperatingMode.ROOT
+            val list = detector.getRunningAppsRamUsage(isRoot)
+            _appsRamList.value = list
+            _isLoadingRam.value = false
+        }
+    }
+
+    fun stopAppFromRam(packageName: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val app = _managedAppsFlow.value.find { it.packageName == packageName }
+                ?: _allInstalledApps.value.find { it.packageName == packageName }
+                ?: InstalledAppItem(packageName = packageName, appName = packageName)
+            engine.stopSingleApp(app)
+            _manuallyStoppedPackages.add(packageName)
+            delay(350)
+            refreshRamUsage()
+            refreshManagedAppsOnly(silent = true)
         }
     }
 

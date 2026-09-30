@@ -9,8 +9,10 @@ import java.io.InputStreamReader
 
 data class RootProcessState(
     val isRunning: Boolean = false,
+    val hasActiveService: Boolean = false,
     val isForegroundService: Boolean = false,
     val isTop: Boolean = false,
+    val isCached: Boolean = false,
     val pid: Int? = null,
     val activeComponents: Set<String> = emptySet(),
     val isInRecents: Boolean = false
@@ -106,12 +108,12 @@ object RootExecutor {
     suspend fun queryRootProcessStates(): Map<String, RootProcessState> = withContext(Dispatchers.IO) {
         val map = mutableMapOf<String, RootProcessState>()
         try {
-            // Fast combined root query: ps + services + processes (procState=TOP / FGS) + media playback + top activity
-            val cmd = "ps -A -o PID,NAME; echo '===SERVICES==='; dumpsys activity services | grep -E 'ServiceRecord|isForeground='; echo '===PROCESSES==='; dumpsys activity processes | grep -E 'ProcessRecord\\{|curProcState=|procState='; echo '===MEDIA==='; dumpsys media_session | grep -E 'package=|state=PlaybackState'; echo '===TOP==='; dumpsys activity activities | grep -E 'mResumedActivity|mFocusedApp'; exit 0"
+            // Fast combined root query: services + processes (procState=TOP / FGS / SV) + media playback + top activity
+            val cmd = "dumpsys activity services | grep -E 'ServiceRecord|isForeground='; echo '===PROCESSES==='; dumpsys activity processes | grep -E 'ProcessRecord\\{|curProcState=|procState='; echo '===MEDIA==='; dumpsys media_session | grep -E 'package=|state=PlaybackState'; echo '===TOP==='; dumpsys activity activities | grep -E 'mResumedActivity|mFocusedApp'; exit 0"
             val res = executeCommand(cmd)
             val output = res.getOrNull() ?: ""
             if (output.isNotEmpty()) {
-                var section = 0 // 0 = ps, 1 = services, 2 = processes, 3 = media, 4 = top
+                var section = 1 // 1 = services, 2 = processes, 3 = media, 4 = top
                 var lastServicePkg: String? = null
                 var lastProcessPkg: String? = null
                 var lastMediaPkg: String? = null
@@ -119,10 +121,6 @@ object RootExecutor {
                 for (line in output.lines()) {
                     val trimmed = line.trim()
                     if (trimmed.isEmpty()) continue
-                    if (trimmed == "===SERVICES===") {
-                        section = 1
-                        continue
-                    }
                     if (trimmed == "===PROCESSES===") {
                         section = 2
                         continue
@@ -137,24 +135,14 @@ object RootExecutor {
                     }
 
                     when (section) {
-                        0 -> {
-                            if (trimmed.startsWith("PID")) continue
-                            val parts = trimmed.split(Regex("\\s+"), limit = 2)
-                            if (parts.size >= 2) {
-                                val pid = parts[0].toIntOrNull()
-                                val name = parts[1]
-                                val pkg = name.substringBefore(':')
-                                map[pkg] = RootProcessState(
-                                    isRunning = true,
-                                    pid = pid
-                                )
-                            }
-                        }
                         1 -> {
+                            // dumpsys activity services: ServiceRecord{... u0 package/.Service ...}
                             if (trimmed.contains("ServiceRecord{") || trimmed.contains("u0 ")) {
                                 val match = Regex("u0\\s+([a-zA-Z0-9._]+)/").find(trimmed)
                                 if (match != null) {
                                     lastServicePkg = match.groupValues[1]
+                                    val existing = map[lastServicePkg] ?: RootProcessState(isRunning = true)
+                                    map[lastServicePkg] = existing.copy(isRunning = true, hasActiveService = true)
                                 }
                             }
                             if (trimmed.contains("isForeground=true") && lastServicePkg != null) {
@@ -163,13 +151,16 @@ object RootExecutor {
                             }
                         }
                         2 -> {
-                            // dumpsys activity processes: ProcessRecord{... u0 ...:package} or curProcState=TOP/FGS
+                            // dumpsys activity processes: ProcessRecord{... u0 ...:package} or curProcState=TOP/FGS/SV
                             if (trimmed.contains("ProcessRecord{")) {
                                 val match = Regex("u0\\s+[a-zA-Z0-9._]+:([a-zA-Z0-9._]+)").find(trimmed) ?:
                                             Regex(":([a-zA-Z0-9._]+)/").find(trimmed) ?:
                                             Regex("u0\\s+([a-zA-Z0-9._]+)").find(trimmed)
                                 if (match != null) {
-                                    lastProcessPkg = match.groupValues[1].substringBefore(':')
+                                    val candidate = match.groupValues[1].substringBefore(':')
+                                    if (candidate.contains('.')) {
+                                        lastProcessPkg = candidate
+                                    }
                                 }
                             }
                             if (lastProcessPkg != null) {
@@ -179,6 +170,12 @@ object RootExecutor {
                                 } else if (trimmed.contains("procState=FGS") || trimmed.contains("curProcState=FGS") || trimmed.contains("procState=BFGS")) {
                                     val existing = map[lastProcessPkg] ?: RootProcessState(isRunning = true)
                                     map[lastProcessPkg] = existing.copy(isRunning = true, isForegroundService = true)
+                                } else if (trimmed.contains("procState=SV") || trimmed.contains("curProcState=SV") || trimmed.contains("procState=BGS") || trimmed.contains("procState=SERVICE")) {
+                                    val existing = map[lastProcessPkg] ?: RootProcessState(isRunning = true)
+                                    map[lastProcessPkg] = existing.copy(isRunning = true, hasActiveService = true)
+                                } else if (trimmed.contains("procState=CAC") || trimmed.contains("curProcState=CAC") || trimmed.contains("procState=CEM")) {
+                                    val existing = map[lastProcessPkg] ?: RootProcessState()
+                                    map[lastProcessPkg] = existing.copy(isCached = true)
                                 }
                             }
                         }

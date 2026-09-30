@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.PlayArrow
@@ -128,6 +129,10 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
     val batchProgress by viewModel.batchProgress.collectAsState()
     val statusMessage by viewModel.statusMessage.collectAsState()
     val showWakeUpManagerDialog by viewModel.showWakeUpManagerDialog.collectAsState()
+    val showRamUsageDialog by viewModel.showRamUsageDialog.collectAsState()
+    val systemRamOverview by viewModel.systemRamOverview.collectAsState()
+    val appsRamList by viewModel.appsRamList.collectAsState()
+    val isLoadingRam by viewModel.isLoadingRam.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
     var showMenu by remember { mutableStateOf(false) }
@@ -381,6 +386,16 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                                     },
                                     leadingIcon = {
                                         Icon(imageVector = Icons.Default.PowerOff, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("RAM Usage", fontWeight = FontWeight.Medium) },
+                                    onClick = {
+                                        showMenu = false
+                                        viewModel.openRamUsageDialog()
+                                    },
+                                    leadingIcon = {
+                                        Icon(imageVector = Icons.Default.Memory, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                     }
                                 )
                                 HorizontalDivider(color = Color(0xFFE2E8F0))
@@ -956,6 +971,18 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                 showModeDialog = false
             },
             onDismiss = { showModeDialog = false }
+        )
+    }
+
+    // RAM Usage Bottom Sheet
+    if (showRamUsageDialog) {
+        RamUsageBottomSheet(
+            ramOverview = systemRamOverview,
+            appsRamList = appsRamList,
+            isLoading = isLoadingRam,
+            onDismiss = { viewModel.closeRamUsageDialog() },
+            onRefresh = { viewModel.refreshRamUsage() },
+            onStopApp = { pkg -> viewModel.stopAppFromRam(pkg) }
         )
     }
 }

@@ -116,3 +116,40 @@ data class BatchFreezeProgress(
     val failedCount: Int = 0,
     val summary: String = ""
 )
+
+data class AppRamUsageItem(
+    val packageName: String,
+    val appName: String,
+    val icon: Drawable? = null,
+    val pssKb: Long = 0L,
+    val pid: Int = 0,
+    val isSystemApp: Boolean = false
+) {
+    val ramMb: Long get() = pssKb / 1024L
+    val ramFormatted: String get() {
+        val mb = pssKb / 1024.0
+        return if (mb >= 1024.0) {
+            String.format(java.util.Locale.US, "%.1f GB", mb / 1024.0)
+        } else {
+            String.format(java.util.Locale.US, "%.0f MB", mb)
+        }
+    }
+}
+
+data class SystemRamOverview(
+    val totalBytes: Long = 0L,
+    val availableBytes: Long = 0L,
+    val usedBytes: Long = 0L
+) {
+    val usedPercentage: Int
+        get() = if (totalBytes > 0) ((usedBytes.toDouble() / totalBytes.toDouble()) * 100).coerceIn(0.0, 100.0).toInt() else 0
+
+    val totalFormatted: String
+        get() = String.format(java.util.Locale.US, "%.1f GB", totalBytes / (1024.0 * 1024.0 * 1024.0))
+
+    val usedFormatted: String
+        get() = String.format(java.util.Locale.US, "%.1f GB", usedBytes / (1024.0 * 1024.0 * 1024.0))
+
+    val freeFormatted: String
+        get() = String.format(java.util.Locale.US, "%.1f GB", availableBytes / (1024.0 * 1024.0 * 1024.0))
+}

@@ -946,6 +946,128 @@ class AppStatusDetector(private val context: Context) {
         state = AppState.BACKGROUND_FREE,
         stateDetail = "Hibernated"
     )
+
+    fun getSystemRamOverview(): com.example.model.SystemRamOverview {
+        return try {
+            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val memInfo = ActivityManager.MemoryInfo()
+            am.getMemoryInfo(memInfo)
+            val total = memInfo.totalMem
+            val avail = memInfo.availMem
+            val used = (total - avail).coerceAtLeast(0L)
+            com.example.model.SystemRamOverview(
+                totalBytes = total,
+                availableBytes = avail,
+                usedBytes = used
+            )
+        } catch (e: Exception) {
+            com.example.model.SystemRamOverview()
+        }
+    }
+
+    suspend fun getRunningAppsRamUsage(isRoot: Boolean): List<com.example.model.AppRamUsageItem> = withContext(Dispatchers.IO) {
+        val result = mutableMapOf<String, com.example.model.AppRamUsageItem>()
+        val pm = context.packageManager
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+
+        // 1. Try dumpsys meminfo in Root mode
+        if (isRoot) {
+            try {
+                val res = com.example.engine.RootExecutor.executeCommand("dumpsys meminfo -s")
+                val output = res.getOrNull() ?: ""
+                var inProcessSection = false
+                val regex = Regex("""^\s*([0-9,]+)K:\s+([a-zA-Z0-9._]+)(?:\s+\(pid\s+(\d+)\))?""")
+
+                for (line in output.lines()) {
+                    if (line.contains("Total PSS by process:")) {
+                        inProcessSection = true
+                        continue
+                    }
+                    if (inProcessSection && (line.contains("Total PSS by category:") || line.contains("Total PSS by OOM adjustment:"))) {
+                        break
+                    }
+                    if (inProcessSection) {
+                        val match = regex.find(line)
+                        if (match != null) {
+                            val kbStr = match.groupValues[1].replace(",", "")
+                            val pssKb = kbStr.toLongOrNull() ?: 0L
+                            val procName = match.groupValues[2]
+                            val pid = match.groupValues.getOrNull(3)?.toIntOrNull() ?: 0
+                            val pkg = procName.substringBefore(':')
+
+                            if (pkg in setOf("system", "zygote", "zygote64", "surfaceflinger", "audioserver", "cameraserver", "mediaserver", "adbd", "init", "logd", "vold", "netd")) {
+                                continue
+                            }
+
+                            try {
+                                val appInfo = pm.getApplicationInfo(pkg, 0)
+                                val appName = pm.getApplicationLabel(appInfo).toString()
+                                val icon = com.example.util.AppIconCache.getOrLoad(context, appInfo)
+                                val isSys = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+
+                                val existing = result[pkg]
+                                val combinedPss = (existing?.pssKb ?: 0L) + pssKb
+                                result[pkg] = com.example.model.AppRamUsageItem(
+                                    packageName = pkg,
+                                    appName = appName,
+                                    icon = icon,
+                                    pssKb = combinedPss,
+                                    pid = if (pid != 0) pid else existing?.pid ?: 0,
+                                    isSystemApp = isSys
+                                )
+                            } catch (e: Exception) {
+                                // Non-app process
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // Root command fallback
+            }
+        }
+
+        // 2. ActivityManager RunningAppProcessInfo for any remaining or non-root
+        try {
+            val procs = am.runningAppProcesses ?: emptyList()
+            val missingPids = procs.filter { proc ->
+                proc.pkgList?.any { !result.containsKey(it) } == true
+            }
+            if (missingPids.isNotEmpty()) {
+                val pidsArray = missingPids.map { it.pid }.toIntArray()
+                val memInfos = am.getProcessMemoryInfo(pidsArray)
+                for (i in missingPids.indices) {
+                    val proc = missingPids[i]
+                    val pssKb = memInfos.getOrNull(i)?.totalPss?.toLong() ?: 0L
+                    val pkgs = proc.pkgList ?: continue
+                    for (pkg in pkgs) {
+                        if (pkg in setOf("system", "android")) continue
+                        if (!result.containsKey(pkg)) {
+                            try {
+                                val appInfo = pm.getApplicationInfo(pkg, 0)
+                                val appName = pm.getApplicationLabel(appInfo).toString()
+                                val icon = com.example.util.AppIconCache.getOrLoad(context, appInfo)
+                                val isSys = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+                                result[pkg] = com.example.model.AppRamUsageItem(
+                                    packageName = pkg,
+                                    appName = appName,
+                                    icon = icon,
+                                    pssKb = pssKb,
+                                    pid = proc.pid,
+                                    isSystemApp = isSys
+                                )
+                            } catch (e: Exception) {
+                                // Package not found
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            // Ignore
+        }
+
+        result.values.toList().sortedByDescending { it.pssKb }
+    }
 }
 
 data class BootReceiverItem(

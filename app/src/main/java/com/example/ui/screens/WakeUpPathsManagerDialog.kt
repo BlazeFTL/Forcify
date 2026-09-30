@@ -209,21 +209,29 @@ fun WakeUpPathsManagerDialog(
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 4.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = Color(0xFFEFF6FF)
+                    containerColor = Color.White
                 ),
                 shape = RoundedCornerShape(12.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFBFDBFE))
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0))
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                     Spacer(modifier = Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
@@ -235,16 +243,19 @@ fun WakeUpPathsManagerDialog(
                         Text(
                             text = "One-tap reset all system defaults to fix app memory & recents.",
                             fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = 15.sp
                         )
                     }
+                    Spacer(modifier = Modifier.width(8.dp))
                     Button(
                         onClick = { viewModel.resetAllAppOpsToSystemDefault() },
                         shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier.height(32.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                     ) {
-                        Text("Reset Defaults", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("Reset", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -511,11 +522,11 @@ private fun WakeUpAppCard(
                     checked = isSelected,
                     onCheckedChange = { onToggleSelect() },
                     colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary),
-                    modifier = Modifier.padding(end = 4.dp)
+                    modifier = Modifier.padding(end = 2.dp)
                 )
 
-                AppIconImage(drawable = app.icon, appName = app.appName, size = 42.dp)
-                Spacer(modifier = Modifier.width(12.dp))
+                AppIconImage(drawable = app.icon, appName = app.appName, size = 40.dp)
+                Spacer(modifier = Modifier.width(10.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
@@ -536,56 +547,61 @@ private fun WakeUpAppCard(
                                     .clip(CircleShape)
                                     .background(Color(0xFF10B981))
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
+                            Spacer(modifier = Modifier.width(5.dp))
                             Text(
-                                text = if (cutPathsCount == paths.size && paths.isNotEmpty()) "All wake-ups cut / blocked" else "$cutPathsCount of ${paths.size} wake-ups cut",
+                                text = if (cutPathsCount == paths.size && paths.isNotEmpty()) "All cut" else "$cutPathsCount / ${paths.size} cut",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF10B981)
+                                color = Color(0xFF10B981),
+                                maxLines = 1
                             )
                         }
                     } else {
                         Text(
-                            text = if (paths.isNotEmpty()) "${paths.size} wake-up paths active" else "No active wake-up paths",
+                            text = if (paths.isNotEmpty()) "${paths.size} active" else "No paths",
                             fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.width(6.dp))
+                Spacer(modifier = Modifier.width(8.dp))
 
                 // Re-attach / Cut Button
                 if (hasCutPaths) {
                     OutlinedButton(
                         onClick = onRestoreAll,
                         shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier.height(30.dp),
                         colors = ButtonDefaults.outlinedButtonColors(
                             contentColor = MaterialTheme.colorScheme.primary
                         )
                     ) {
-                        Text("Re-attach", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("Re-attach", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 } else {
                     OutlinedButton(
                         onClick = onCutAll,
                         shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier.height(30.dp),
                         colors = ButtonDefaults.outlinedButtonColors(
                             contentColor = Color(0xFFDC2626)
                         )
                     ) {
-                        Text("Cut All", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("Cut All", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
 
                 // Expand paths icon button
-                IconButton(onClick = onToggleExpand, modifier = Modifier.size(36.dp)) {
+                IconButton(onClick = onToggleExpand, modifier = Modifier.size(32.dp)) {
                     Icon(
                         imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                         contentDescription = "Expand paths",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
