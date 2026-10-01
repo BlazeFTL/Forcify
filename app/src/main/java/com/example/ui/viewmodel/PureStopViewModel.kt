@@ -485,6 +485,8 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                 val runningMap = detector.getRunningProcessesMap()
                 val isRoot = preferences.mode == OperatingMode.ROOT
                 val rootProcessMap = if (isRoot) RootExecutor.queryRootProcessStates() else emptyMap()
+                val nonRootActivityMap: Map<String, com.example.detector.NonRootProcessActivity> =
+                    if (!isRoot) detector.getNonRootActivityMap() else emptyMap()
                 val enabledAccessibilityPkgs = detector.getEnabledAccessibilityPackages()
 
                 val resultList = mutableListOf<InstalledAppItem>()
@@ -497,6 +499,8 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
 
                         val rootState = rootProcessMap[entity.packageName]
                         val runningProc = runningMap[entity.packageName]
+                        val nonRootActivity = nonRootActivityMap[entity.packageName]
+                        val isInRecents = (rootState?.isInRecents == true) || (nonRootActivity?.isInRecents == true)
                         val isFlagStopped = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_STOPPED) != 0
                         val isRecentlyStopped = _manuallyStoppedPackages.contains(entity.packageName)
 
@@ -520,7 +524,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                             _manuallyStoppedPackages.remove(entity.packageName)
                         }
 
-                        val isStoppedState = (isFlagStopped || isRecentlyStopped) && !isTopForeground && !isFgService && !isAccessibilityActive
+                        val isStoppedState = (isFlagStopped || isRecentlyStopped) && !isTopForeground && !isFgService && !isAccessibilityActive && !isInRecents
 
                         val (state, stateDetail, secondaryDetail) = if (isStoppedState) {
                             Triple(AppState.BACKGROUND_FREE, "Hibernated", "")
@@ -538,6 +542,14 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                             if (isWorkingIgnored) sub.add("Ignored running state")
                             if (showRestrictedForeground) sub.add("Restricted running as foreground")
                             Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", sub.joinToString("\n"))
+                        } else if (isInRecents && !isWorkingIgnored) {
+                            val sub = mutableListOf<String>()
+                            if (showRestrictedForeground) sub.add("Restricted running as foreground")
+                            Triple(AppState.WORKING_STATE, "Working State", "In recent tasks (protected)")
+                        } else if (isInRecents && isWorkingIgnored) {
+                            val sub = mutableListOf("In recent tasks", "Ignored running state")
+                            if (showRestrictedForeground) sub.add("Restricted running as foreground")
+                            Triple(AppState.BACKGROUND_RUNNING, "Running in background", sub.joinToString("\n"))
                         } else if (hasActiveService) {
                             val sub = mutableListOf<String>()
                             if (isWorkingIgnored) sub.add("Ignored running state")

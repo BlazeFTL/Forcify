@@ -435,9 +435,10 @@ class AppStatusDetector(private val context: Context) {
             return Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
         }
 
-        // 2. IN USER'S RECENTS -> Running in background (not protected working mode, stoppable)
+        // 2. IN USER'S RECENTS -> Working State (Protected from screen-off auto-hibernation)
         if (rootState.isInRecents) {
-            return Triple(AppState.BACKGROUND_RUNNING, "Running in background", "In recent tasks")
+            val secondary = if (isIgnoredBattery) "Restricted running as foreground" else "In recent tasks (protected)"
+            return Triple(AppState.WORKING_STATE, "Working State", secondary)
         }
 
         // 3. REGULAR BACKGROUND RUNNING PROCESS (e.g. MovieBox, AyuGram, Claude, MT Manager)
@@ -483,16 +484,16 @@ class AppStatusDetector(private val context: Context) {
                 return Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
             }
 
+            if (nonRootActivity?.isInRecents == true && (now - nonRootActivity.lastEventTimestamp < 15 * 60 * 1000L)) {
+                val secondary = if (isIgnoredBattery) "Restricted running as foreground" else "In recent tasks (protected)"
+                return Triple(AppState.WORKING_STATE, "Working State", secondary)
+            }
+
             if (importance >= ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED) {
                 return Triple(AppState.CACHED, "Cached in RAM", "Will hibernate after screen off")
             }
 
-            val recentHint = if (nonRootActivity?.isInRecents == true && (now - nonRootActivity.lastEventTimestamp < 10 * 60 * 1000L)) {
-                "In recent tasks"
-            } else if (isIgnoredBattery) {
-                "Restricted running as foreground"
-            } else ""
-
+            val recentHint = if (isIgnoredBattery) "Restricted running as foreground" else ""
             return Triple(AppState.BACKGROUND_RUNNING, "Running in background", recentHint)
         }
 

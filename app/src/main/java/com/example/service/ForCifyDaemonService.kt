@@ -108,13 +108,13 @@ class ForCifyDaemonService : Service() {
 
             val isRoot = preferences.mode == OperatingMode.ROOT
             if (isRoot) {
+                val topMap = RootExecutor.queryRootProcessStates()
                 for (pkg in targetPkgs) {
-                    // Skip if working state is protected and app is in active task
+                    // Skip if working state is protected and app is in active task / in recents
                     if (!preferences.isWorkingStateIgnored(pkg)) {
-                        // Check if foreground before stopping
-                        val topMap = RootExecutor.queryRootProcessStates()
+                        // Check if foreground, media playback, or in recents before stopping
                         val state = topMap[pkg]
-                        if (state?.isForegroundService == true || state?.isTop == true) {
+                        if (state?.isForegroundService == true || state?.isTop == true || state?.isInRecents == true) {
                             continue
                         }
                     }

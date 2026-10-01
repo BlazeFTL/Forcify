@@ -1100,7 +1100,7 @@ private fun GreenifyStyleAppCard(
         app.stateDetail.isNotBlank() && app.stateDetail != "Hibernated" && app.stateDetail != "Pending Hibernation" -> app.stateDetail
         app.state == AppState.EVADING_RESTRICTIONS -> "Running as foreground (evading restrictions)"
         app.state == AppState.FOREGROUND -> "Foreground"
-        app.state == AppState.WORKING_STATE -> "Being used by Accessibility"
+        app.state == AppState.WORKING_STATE -> if (app.secondaryDetail.contains("recent", ignoreCase = true)) "In recent tasks (protected)" else "Working State"
         isWillHibernateSoon -> ""
         else -> ""
     }
@@ -1292,7 +1292,7 @@ private fun GreenifyStyleAppCard(
                             text = {
                                 Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                                     Text("Ignore Working State", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                    Text("Hibernate during background playback", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("Hibernate even if in Recent Tasks or media playback", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             },
                             leadingIcon = {
