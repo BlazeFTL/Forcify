@@ -59,6 +59,30 @@ data class WakeUpPath(
 // Backward-compatibility alias
 typealias WakeUpTrigger = WakeUpPath
 
+data class DetectedWakeUpEvent(
+    val id: String,
+    val packageName: String,
+    val appName: String,
+    val componentName: String,
+    val pathType: WakeUpPathType,
+    val pathTitle: String,
+    val triggerContext: String,
+    val rawReason: String = "",
+    val timestamp: Long = System.currentTimeMillis(),
+    val isCut: Boolean = false
+) {
+    val formattedTime: String
+        get() {
+            val diff = System.currentTimeMillis() - timestamp
+            return when {
+                diff < 60_000L -> "Just now"
+                diff < 3600_000L -> "${diff / 60_000L}m ago"
+                diff < 86400_000L -> "${diff / 3600_000L}h ago"
+                else -> "${diff / 86400_000L}d ago"
+            }
+        }
+}
+
 data class WakeUpDetails(
     val wakeupCount24h: Int = 0,
     val paths: List<WakeUpPath> = emptyList(),

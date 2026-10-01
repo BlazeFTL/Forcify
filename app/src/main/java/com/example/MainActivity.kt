@@ -1,5 +1,6 @@
 package com.example
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -23,6 +24,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        handleWakeUpIntent(intent)
         com.example.service.ForCifyDaemonService.start(this)
         setContent {
             MyApplicationTheme {
@@ -39,6 +41,17 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleWakeUpIntent(intent)
+    }
+
+    private fun handleWakeUpIntent(intent: Intent?) {
+        val pkg = intent?.getStringExtra("EXTRA_OPEN_WAKEUP_PKG") ?: return
+        viewModel.openWakeUpForPackage(pkg)
     }
 
     override fun onResume() {

@@ -510,6 +510,29 @@ class AppStatusDetector(private val context: Context) {
         val list = mutableListOf<WakeUpPath>()
         val pkg = pkgInfo.packageName
 
+        val detectedEventsMap = try {
+            com.example.data.PureStopPreferences(context)
+                .getDetectedWakeUpEvents()
+                .filter { it.packageName == pkg }
+                .associateBy { it.componentName }
+        } catch (e: Exception) {
+            emptyMap()
+        }
+
+        val actualSyncAdapterServices = try {
+            val syncIntent = Intent("android.content.SyncAdapter").setPackage(pkg)
+            packageManager.queryIntentServices(syncIntent, 0).mapNotNull { it.serviceInfo?.name }.toSet()
+        } catch (e: Exception) {
+            emptySet()
+        }
+
+        val actualDocProviders = try {
+            val docIntent = Intent("android.content.action.DOCUMENTS_PROVIDER").setPackage(pkg)
+            packageManager.queryIntentContentProviders(docIntent, 0).mapNotNull { it.providerInfo?.name }.toSet()
+        } catch (e: Exception) {
+            emptySet()
+        }
+
         // 1. Content Providers (Major culprit behind silent app autostart like TeraBoxProvider, DocumentsProvider)
         val providers = pkgInfo.providers ?: emptyArray()
         for (provider in providers) {
@@ -518,15 +541,33 @@ class AppStatusDetector(private val context: Context) {
             val authority = provider.authority ?: ""
             val id = "$pkg:provider:$fullName"
             val isCut = isAppCut || cutPathIds.contains(id)
-            val isCurrentlyActive = activeComponents.contains(fullName) || activeComponents.any { it.contains(simpleName) }
+            val detected = detectedEventsMap[fullName] ?: detectedEventsMap[provider.name] ?: detectedEventsMap.values.find { it.componentName.endsWith(".$simpleName") }
+            val isCurrentlyActive = activeComponents.contains(fullName) || activeComponents.any { it.contains(simpleName) } || (detected != null && !isCut)
 
             val isDocsProvider = authority.contains("documents", ignoreCase = true) ||
+                authority.contains("drive", ignoreCase = true) ||
                 simpleName.contains("Documents", ignoreCase = true) ||
                 simpleName.contains("Drive", ignoreCase = true) ||
-                simpleName.contains("File", ignoreCase = true)
+                simpleName.contains("File", ignoreCase = true) ||
+                simpleName.contains("TeraBox", ignoreCase = true) ||
+                actualDocProviders.contains(fullName) ||
+                actualDocProviders.contains(provider.name) ||
+                provider.readPermission == "android.permission.MANAGE_DOCUMENTS" ||
+                provider.writePermission == "android.permission.MANAGE_DOCUMENTS"
 
             val isSyncProvider = authority.contains("sync", ignoreCase = true) ||
                 simpleName.contains("Sync", ignoreCase = true)
+
+            val baseReason = if (isDocsProvider) {
+                "Android launches app process automatically whenever system storage or file picker queries document providers"
+            } else {
+                "Exported URI authority '$authority' accessed by system or external apps, triggering silent process launch"
+            }
+            val finalReason = if (detected != null) {
+                "⚡ CAUGHT WAKING APP: ${detected.triggerContext}!\n$baseReason"
+            } else {
+                baseReason
+            }
 
             if (isDocsProvider) {
                 list.add(
@@ -536,7 +577,7 @@ class AppStatusDetector(private val context: Context) {
                         type = WakeUpPathType.PROVIDER_DOCUMENTS,
                         title = "Documents Provider ($simpleName)",
                         componentName = fullName,
-                        reason = "Android launches app process automatically whenever system storage or file picker queries document providers",
+                        reason = finalReason,
                         riskLevel = WakeUpRiskLevel.MODERATE,
                         riskExplanation = "Cutting stops autostart when browsing files; app files won't show in system file picker until app is launched",
                         isPrimaryCulprit = true,
@@ -553,10 +594,10 @@ class AppStatusDetector(private val context: Context) {
                         type = WakeUpPathType.PROVIDER_CONTENT,
                         title = "Content Provider ($simpleName)",
                         componentName = fullName,
-                        reason = "Exported URI authority '$authority' accessed by system or external apps, triggering silent process launch",
+                        reason = finalReason,
                         riskLevel = WakeUpRiskLevel.MODERATE,
                         riskExplanation = "Cutting prevents other apps or system queries from launching this app in background",
-                        isPrimaryCulprit = isCurrentlyActive || isSyncProvider,
+                        isPrimaryCulprit = isCurrentlyActive || isSyncProvider || (detected != null),
                         isActiveVector = isCurrentlyActive,
                         wakeupCount = 0,
                         isCut = isCut
@@ -572,11 +613,14 @@ class AppStatusDetector(private val context: Context) {
             val fullName = if (service.name.startsWith(".")) "$pkg${service.name}" else service.name
             val id = "$pkg:service:$fullName"
             val isCut = isAppCut || cutPathIds.contains(id)
-            val isCurrentlyActive = activeComponents.contains(fullName) || activeComponents.any { it.contains(simpleName) }
+            val detected = detectedEventsMap[fullName] ?: detectedEventsMap[service.name] ?: detectedEventsMap.values.find { it.componentName.endsWith(".$simpleName") }
+            val isCurrentlyActive = activeComponents.contains(fullName) || activeComponents.any { it.contains(simpleName) } || (detected != null && !isCut)
 
             val isSyncAdapter = simpleName.contains("Sync", ignoreCase = true) ||
                 simpleName.contains("Account", ignoreCase = true) ||
-                simpleName.contains("Authenticator", ignoreCase = true)
+                simpleName.contains("Authenticator", ignoreCase = true) ||
+                actualSyncAdapterServices.contains(fullName) ||
+                actualSyncAdapterServices.contains(service.name)
 
             val isJob = simpleName.contains("Job", ignoreCase = true) ||
                 simpleName.contains("Work", ignoreCase = true) ||
@@ -586,6 +630,18 @@ class AppStatusDetector(private val context: Context) {
                 simpleName.contains("Fcm", ignoreCase = true) ||
                 simpleName.contains("Messaging", ignoreCase = true)
 
+            val serviceReason = when {
+                isSyncAdapter -> "Android AccountManager / SyncManager automatically schedules and wakes this service to run background account synchronization"
+                isJob -> "Scheduled periodic worker invoked by Android JobScheduler under network or idle conditions"
+                isPush -> "Persistent messaging service responsible for processing real-time notifications"
+                else -> "Background worker service running tasks or listening for intent triggers"
+            }
+            val finalServiceReason = if (detected != null) {
+                "⚡ CAUGHT WAKING APP: ${detected.triggerContext}!\n$serviceReason"
+            } else {
+                serviceReason
+            }
+
             if (isSyncAdapter) {
                 list.add(
                     WakeUpPath(
@@ -594,7 +650,7 @@ class AppStatusDetector(private val context: Context) {
                         type = WakeUpPathType.SERVICE_SYNC_ADAPTER,
                         title = "Account SyncAdapter ($simpleName)",
                         componentName = fullName,
-                        reason = "Android AccountManager / SyncManager automatically schedules and wakes this service to run background account synchronization",
+                        reason = finalServiceReason,
                         riskLevel = WakeUpRiskLevel.MODERATE,
                         riskExplanation = "Cutting stops automatic cloud sync in background; manual refresh still works inside app",
                         isPrimaryCulprit = true,
@@ -611,7 +667,7 @@ class AppStatusDetector(private val context: Context) {
                         type = WakeUpPathType.SERVICE_JOB,
                         title = "JobScheduler ($simpleName)",
                         componentName = fullName,
-                        reason = "Scheduled periodic worker invoked by Android JobScheduler under network or idle conditions",
+                        reason = finalServiceReason,
                         riskLevel = WakeUpRiskLevel.SAFE,
                         riskExplanation = "Safe to cut: prevents periodic background jobs from running unprompted",
                         isPrimaryCulprit = isCurrentlyActive,
@@ -628,7 +684,7 @@ class AppStatusDetector(private val context: Context) {
                         type = WakeUpPathType.SERVICE_FOREGROUND,
                         title = "Push Service ($simpleName)",
                         componentName = fullName,
-                        reason = "Persistent messaging service responsible for processing real-time notifications",
+                        reason = finalServiceReason,
                         riskLevel = WakeUpRiskLevel.RISKY,
                         riskExplanation = "High Risk: cutting this service will prevent or delay new incoming push notifications",
                         isPrimaryCulprit = isCurrentlyActive,
@@ -645,7 +701,7 @@ class AppStatusDetector(private val context: Context) {
                         type = WakeUpPathType.SERVICE_BACKGROUND,
                         title = "Background Service ($simpleName)",
                         componentName = fullName,
-                        reason = "Background worker service running tasks or listening for intent triggers",
+                        reason = finalServiceReason,
                         riskLevel = WakeUpRiskLevel.MODERATE,
                         riskExplanation = "Stops background processing for this worker",
                         isPrimaryCulprit = isCurrentlyActive,

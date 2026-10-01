@@ -1148,6 +1148,79 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
     private val _showWakeUpManagerDialog = MutableStateFlow(false)
     val showWakeUpManagerDialog: StateFlow<Boolean> = _showWakeUpManagerDialog.asStateFlow()
 
+    // Background detected wake-up events
+    val detectedWakeUpEvents: StateFlow<List<com.example.model.DetectedWakeUpEvent>> =
+        com.example.detector.BackgroundWakeUpDetector.detectedEvents
+
+    fun cutDetectedWakeUpEvent(event: com.example.model.DetectedWakeUpEvent) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val pkg = event.packageName
+            val comp = event.componentName
+            val formattedComp = if (comp.contains("/")) comp else "$pkg/$comp"
+
+            val pathId = when (event.pathType) {
+                com.example.model.WakeUpPathType.PROVIDER_DOCUMENTS, com.example.model.WakeUpPathType.PROVIDER_CONTENT -> "$pkg:provider:$comp"
+                com.example.model.WakeUpPathType.SERVICE_SYNC_ADAPTER, com.example.model.WakeUpPathType.SERVICE_BACKGROUND, com.example.model.WakeUpPathType.SERVICE_FOREGROUND, com.example.model.WakeUpPathType.SERVICE_JOB -> "$pkg:service:$comp"
+                com.example.model.WakeUpPathType.RECEIVER_BOOT, com.example.model.WakeUpPathType.RECEIVER_CONNECTIVITY, com.example.model.WakeUpPathType.RECEIVER_POWER, com.example.model.WakeUpPathType.RECEIVER_CUSTOM -> "$pkg:receiver:$comp"
+                else -> "$pkg:comp:$comp"
+            }
+
+            preferences.togglePathCut(pkg, pathId, true)
+            preferences.markDetectedWakeUpEventCut(event.id)
+
+            if (preferences.mode == OperatingMode.ROOT) {
+                RootExecutor.executeCommand("pm disable $formattedComp")
+                RootExecutor.executeCommand("am force-stop $pkg")
+            } else {
+                RootExecutor.executeCommand("am force-stop $pkg")
+            }
+
+            _statusMessage.value = "Cut ${event.componentName.substringAfterLast('.')} and stopped ${event.appName}"
+            refreshManagedAppsOnly(silent = true)
+        }
+    }
+
+    fun dismissDetectedWakeUpEvent(event: com.example.model.DetectedWakeUpEvent) {
+        preferences.removeDetectedWakeUpEvent(event.id)
+    }
+
+    fun cutAllDetectedWakeUps() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val events = detectedWakeUpEvents.value.filter { !it.isCut }
+            for (ev in events) {
+                val pkg = ev.packageName
+                val comp = ev.componentName
+                val formattedComp = if (comp.contains("/")) comp else "$pkg/$comp"
+
+                val pathId = when (ev.pathType) {
+                    com.example.model.WakeUpPathType.PROVIDER_DOCUMENTS, com.example.model.WakeUpPathType.PROVIDER_CONTENT -> "$pkg:provider:$comp"
+                    com.example.model.WakeUpPathType.SERVICE_SYNC_ADAPTER, com.example.model.WakeUpPathType.SERVICE_BACKGROUND, com.example.model.WakeUpPathType.SERVICE_FOREGROUND, com.example.model.WakeUpPathType.SERVICE_JOB -> "$pkg:service:$comp"
+                    com.example.model.WakeUpPathType.RECEIVER_BOOT, com.example.model.WakeUpPathType.RECEIVER_CONNECTIVITY, com.example.model.WakeUpPathType.RECEIVER_POWER, com.example.model.WakeUpPathType.RECEIVER_CUSTOM -> "$pkg:receiver:$comp"
+                    else -> "$pkg:comp:$comp"
+                }
+                preferences.togglePathCut(pkg, pathId, true)
+                preferences.markDetectedWakeUpEventCut(ev.id)
+                if (preferences.mode == OperatingMode.ROOT) {
+                    RootExecutor.executeCommand("pm disable $formattedComp")
+                    RootExecutor.executeCommand("am force-stop $pkg")
+                }
+            }
+            _statusMessage.value = "Cut ${events.size} detected wake-up paths"
+            refreshManagedAppsOnly(silent = true)
+        }
+    }
+
+    fun clearAllDetectedWakeUps() {
+        preferences.clearAllDetectedWakeUpEvents()
+    }
+
+    fun openWakeUpForPackage(packageName: String) {
+        val app = allManagedApps.value.find { it.packageName == packageName }
+        if (app != null) {
+            selectAppForWakeup(app)
+        }
+    }
+
     fun openWakeUpManager() {
         _showWakeUpManagerDialog.value = true
     }

@@ -89,7 +89,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -141,6 +144,18 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
     var showModeDialog by remember { mutableStateOf(false) }
     var isSearchExpanded by remember { mutableStateOf(false) }
     var isHibernatedSectionExpanded by remember { mutableStateOf(true) }
+
+    val detectedWakeUpEvents by viewModel.detectedWakeUpEvents.collectAsState()
+    val searchFocusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    LaunchedEffect(isSearchExpanded) {
+        if (isSearchExpanded) {
+            kotlinx.coroutines.delay(100)
+            searchFocusRequester.requestFocus()
+            keyboardController?.show()
+        }
+    }
 
     // Multi-select for batch stopping requested by user
     var selectedPackagesForBatchStop by remember { mutableStateOf(setOf<String>()) }
@@ -311,11 +326,17 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                         }
                     },
                     actions = {
-                        // Search toggle button
+                        // Search toggle button: Clicking Search Anywhere opens keyboard!
                         IconButton(
                             onClick = {
                                 isSearchExpanded = !isSearchExpanded
-                                if (!isSearchExpanded) viewModel.setSearchQuery("")
+                                if (isSearchExpanded) {
+                                    searchFocusRequester.requestFocus()
+                                    keyboardController?.show()
+                                } else {
+                                    viewModel.setSearchQuery("")
+                                    keyboardController?.hide()
+                                }
                             }
                         ) {
                             Icon(imageVector = Icons.Default.Search, contentDescription = "Search Apps")
@@ -622,17 +643,27 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // Optional Search Bar with "X" clear button
+            // Optional Search Bar with "X" clear button: Clicking Search Anywhere opens keyboard!
             AnimatedVisibility(visible = isSearchExpanded && !isMultiSelectMode) {
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { viewModel.setSearchQuery(it) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .focusRequester(searchFocusRequester)
+                        .clickable {
+                            searchFocusRequester.requestFocus()
+                            keyboardController?.show()
+                        },
                     placeholder = { Text("Filter running apps...") },
                     leadingIcon = {
-                        Icon(imageVector = Icons.Default.Search, contentDescription = null)
+                        IconButton(onClick = {
+                            searchFocusRequester.requestFocus()
+                            keyboardController?.show()
+                        }) {
+                            Icon(imageVector = Icons.Default.Search, contentDescription = "Search")
+                        }
                     },
                     trailingIcon = if (searchQuery.isNotBlank()) {
                         {
@@ -647,6 +678,21 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                         focusedContainerColor = MaterialTheme.colorScheme.surface,
                         unfocusedContainerColor = MaterialTheme.colorScheme.surface
                     )
+                )
+            }
+
+            // Real-time Background Wake-Up Detection Alerts Card (e.g. TeraBox, SyncAdapter, DocumentsProvider starts)
+            val activeDetectedWakeUps = remember(detectedWakeUpEvents) {
+                detectedWakeUpEvents.filter { !it.isCut }
+            }
+
+            AnimatedVisibility(visible = activeDetectedWakeUps.isNotEmpty() && !isMultiSelectMode) {
+                DetectedWakeUpsCard(
+                    events = activeDetectedWakeUps,
+                    onCutPath = { event -> viewModel.cutDetectedWakeUpEvent(event) },
+                    onInspect = { event -> viewModel.openWakeUpForPackage(event.packageName) },
+                    onDismiss = { event -> viewModel.dismissDetectedWakeUpEvent(event) },
+                    onCutAll = { viewModel.cutAllDetectedWakeUps() }
                 )
             }
 
@@ -1577,3 +1623,204 @@ private fun ModeSelectionItem(
         }
     }
 }
+
+@Composable
+private fun DetectedWakeUpsCard(
+    events: List<com.example.model.DetectedWakeUpEvent>,
+    onCutPath: (com.example.model.DetectedWakeUpEvent) -> Unit,
+    onInspect: (com.example.model.DetectedWakeUpEvent) -> Unit,
+    onDismiss: (com.example.model.DetectedWakeUpEvent) -> Unit,
+    onCutAll: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFFFFFBEB)
+        ),
+        border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFF59E0B)),
+        shape = RoundedCornerShape(16.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFFF59E0B)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Bolt,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Background Wake-Ups Detected (${events.size})",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        color = Color(0xFF92400E)
+                    )
+                }
+
+                if (events.size > 1) {
+                    TextButton(
+                        onClick = onCutAll,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = "Cut All (${events.size})",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFD97706)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                events.take(4).forEach { event ->
+                    DetectedWakeUpItemRow(
+                        event = event,
+                        onCutPath = { onCutPath(event) },
+                        onInspect = { onInspect(event) },
+                        onDismiss = { onDismiss(event) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DetectedWakeUpItemRow(
+    event: com.example.model.DetectedWakeUpEvent,
+    onCutPath: () -> Unit,
+    onInspect: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        shape = RoundedCornerShape(12.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFDE68A))
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = event.appName,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = Color(0xFF1E293B)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color(0xFFFEF3C7))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = event.pathTitle,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF92400E)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "${event.triggerContext} • ${event.formattedTime}",
+                        fontSize = 11.sp,
+                        color = Color(0xFF64748B),
+                        lineHeight = 14.sp
+                    )
+                    Text(
+                        text = event.componentName,
+                        fontSize = 10.sp,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        color = Color(0xFF94A3B8),
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                }
+
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.size(24.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Dismiss",
+                        tint = Color(0xFF94A3B8),
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Button(
+                    onClick = onCutPath,
+                    modifier = Modifier.weight(1f).height(34.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFD97706),
+                        contentColor = Color.White
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ContentCut,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Cut This Path Only",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = onInspect,
+                    modifier = Modifier.height(34.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFCBD5E1))
+                ) {
+                    Text(
+                        text = "Inspect",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xFF475569)
+                    )
+                }
+            }
+        }
+    }
+}
+

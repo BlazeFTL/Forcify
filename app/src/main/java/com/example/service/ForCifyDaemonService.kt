@@ -49,6 +49,13 @@ class ForCifyDaemonService : Service() {
         }
 
         registerScreenReceiver()
+
+        // Start background wake-up detection engine to detect covert starts (SyncAdapter, DocumentsProvider, etc.)
+        com.example.detector.BackgroundWakeUpDetector.startMonitoring(
+            context = applicationContext,
+            scope = serviceScope,
+            preferences = preferences
+        )
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -132,6 +139,7 @@ class ForCifyDaemonService : Service() {
             }
             screenReceiver = null
         }
+        com.example.detector.BackgroundWakeUpDetector.stopMonitoring(applicationContext)
         super.onDestroy()
     }
 

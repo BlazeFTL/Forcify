@@ -234,6 +234,92 @@ fun WakeUpCutDialog(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
+                // Detected Background Wake-Up Card (e.g. TeraBox, SyncService caught starting in background)
+                val detectedWakeUps = remember {
+                    com.example.detector.BackgroundWakeUpDetector.detectedEvents.value
+                        .filter { it.packageName == app.packageName && !it.isCut }
+                }
+                if (detectedWakeUps.isNotEmpty()) {
+                    val detected = detectedWakeUps.first()
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFBEB)),
+                        border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFF59E0B)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFF59E0B)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Bolt,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "DETECTED BACKGROUND WAKE-UP VECTOR",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF92400E)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "${detected.pathTitle} (${detected.componentName.substringAfterLast('.')})",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF1E293B)
+                            )
+                            Text(
+                                text = "${detected.triggerContext} • ${detected.formattedTime}",
+                                fontSize = 11.sp,
+                                color = Color(0xFF64748B)
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(
+                                onClick = {
+                                    val matchingPath = paths.find {
+                                        it.componentName.contains(detected.componentName) ||
+                                        detected.componentName.contains(it.componentName) ||
+                                        it.componentName.endsWith(".${detected.componentName.substringAfterLast('.')}")
+                                    } ?: WakeUpPath(
+                                        id = "${app.packageName}:detected:${detected.componentName}",
+                                        packageName = app.packageName,
+                                        type = detected.pathType,
+                                        title = detected.pathTitle,
+                                        componentName = detected.componentName,
+                                        reason = detected.triggerContext,
+                                        isCut = false
+                                    )
+                                    onTogglePath(app, matchingPath, true)
+                                },
+                                modifier = Modifier.fillMaxWidth().height(36.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706))
+                            ) {
+                                Icon(Icons.Default.ContentCut, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Cut This Path Only (${detected.componentName.substringAfterLast('.')})",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                }
+
                 // Quick Action Bar: Cut Safe Only, Cut All, Restore All
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -491,7 +577,21 @@ private fun DetailedWakeUpPathCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    if (path.isActiveVector || path.isPrimaryCulprit) {
+                    if (path.reason.contains("CAUGHT WAKING APP")) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color(0xFFFEF3C7))
+                                .padding(horizontal = 5.dp, vertical = 1.dp)
+                        ) {
+                            Text(
+                                text = "CAUGHT IN BACKGROUND ⚡",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFD97706)
+                            )
+                        }
+                    } else if (path.isActiveVector || path.isPrimaryCulprit) {
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(4.dp))

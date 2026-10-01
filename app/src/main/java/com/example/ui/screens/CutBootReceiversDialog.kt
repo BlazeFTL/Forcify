@@ -59,7 +59,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -81,6 +84,8 @@ fun CutBootReceiversDialog(
 
     var searchQuery by remember { mutableStateOf("") }
     var selectedPackages by remember { mutableStateOf(setOf<String>()) }
+    val searchFocusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     val filteredApps = remember(bootApps, searchQuery) {
         if (searchQuery.isBlank()) bootApps else {
@@ -205,9 +210,21 @@ fun CutBootReceiversDialog(
                     onValueChange = { searchQuery = it },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag("boot_search_input"),
+                        .testTag("boot_search_input")
+                        .focusRequester(searchFocusRequester)
+                        .clickable {
+                            searchFocusRequester.requestFocus()
+                            keyboardController?.show()
+                        },
                     placeholder = { Text("Search apps with boot receivers...") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
+                    leadingIcon = {
+                        IconButton(onClick = {
+                            searchFocusRequester.requestFocus()
+                            keyboardController?.show()
+                        }) {
+                            Icon(Icons.Default.Search, contentDescription = "Search")
+                        }
+                    },
                     trailingIcon = {
                         if (searchQuery.isNotEmpty()) {
                             IconButton(onClick = { searchQuery = "" }) {

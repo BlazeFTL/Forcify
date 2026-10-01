@@ -171,6 +171,87 @@ class PureStopPreferences(context: Context) {
         return newState
     }
 
+    fun getDetectedWakeUpEvents(): List<com.example.model.DetectedWakeUpEvent> {
+        val raw = prefs.getString("detected_wakeup_events", null) ?: return emptyList()
+        return try {
+            val array = org.json.JSONArray(raw)
+            val list = mutableListOf<com.example.model.DetectedWakeUpEvent>()
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                val typeStr = obj.optString("pathType", com.example.model.WakeUpPathType.SERVICE_BACKGROUND.name)
+                val type = try {
+                    com.example.model.WakeUpPathType.valueOf(typeStr)
+                } catch (e: Exception) {
+                    com.example.model.WakeUpPathType.SERVICE_BACKGROUND
+                }
+                list.add(
+                    com.example.model.DetectedWakeUpEvent(
+                        id = obj.getString("id"),
+                        packageName = obj.getString("packageName"),
+                        appName = obj.optString("appName", obj.getString("packageName")),
+                        componentName = obj.getString("componentName"),
+                        pathType = type,
+                        pathTitle = obj.optString("pathTitle", "Wake-Up Component"),
+                        triggerContext = obj.optString("triggerContext", "Background Wake-up"),
+                        rawReason = obj.optString("rawReason", ""),
+                        timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
+                        isCut = obj.optBoolean("isCut", false)
+                    )
+                )
+            }
+            list
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    fun saveDetectedWakeUpEvent(event: com.example.model.DetectedWakeUpEvent) {
+        val current = getDetectedWakeUpEvents().toMutableList()
+        val existingIndex = current.indexOfFirst { it.packageName == event.packageName && it.componentName == event.componentName }
+        if (existingIndex >= 0) {
+            current[existingIndex] = event
+        } else {
+            current.add(0, event)
+        }
+        val trimmed = if (current.size > 50) current.take(50) else current
+        persistDetectedEvents(trimmed)
+    }
+
+    fun markDetectedWakeUpEventCut(id: String) {
+        val current = getDetectedWakeUpEvents().map {
+            if (it.id == id || it.componentName == id) it.copy(isCut = true) else it
+        }
+        persistDetectedEvents(current)
+    }
+
+    fun removeDetectedWakeUpEvent(id: String) {
+        val current = getDetectedWakeUpEvents().filter { it.id != id && it.componentName != id }
+        persistDetectedEvents(current)
+    }
+
+    fun clearAllDetectedWakeUpEvents() {
+        prefs.edit().remove("detected_wakeup_events").apply()
+    }
+
+    private fun persistDetectedEvents(list: List<com.example.model.DetectedWakeUpEvent>) {
+        val array = org.json.JSONArray()
+        for (item in list) {
+            val obj = org.json.JSONObject()
+            obj.put("id", item.id)
+            obj.put("packageName", item.packageName)
+            obj.put("appName", item.appName)
+            obj.put("componentName", item.componentName)
+            obj.put("pathType", item.pathType.name)
+            obj.put("pathTitle", item.pathTitle)
+            obj.put("triggerContext", item.triggerContext)
+            obj.put("rawReason", item.rawReason)
+            obj.put("timestamp", item.timestamp)
+            obj.put("isCut", item.isCut)
+            array.put(obj)
+        }
+        prefs.edit().putString("detected_wakeup_events", array.toString()).apply()
+    }
+
     fun resetSetup() {
         prefs.edit()
             .putBoolean("is_setup_completed", false)

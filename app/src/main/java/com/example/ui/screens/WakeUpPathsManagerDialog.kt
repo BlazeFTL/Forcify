@@ -67,8 +67,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -89,22 +92,31 @@ fun WakeUpPathsManagerDialog(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val managedApps by viewModel.allManagedApps.collectAsState()
     val operatingMode = viewModel.preferences.mode
+    val detectedWakeUpEvents by viewModel.detectedWakeUpEvents.collectAsState()
 
     var searchQuery by remember { mutableStateOf("") }
     var selectedPackages by remember { mutableStateOf(setOf<String>()) }
-    var currentFilter by remember { mutableStateOf("ALL") } // ALL, CUT, ACTIVE
+    var currentFilter by remember { mutableStateOf("ALL") } // ALL, CUT, ACTIVE, DETECTED
     var expandedPackage by remember { mutableStateOf<String?>(null) }
+    val searchFocusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
 
-    val filteredApps = remember(managedApps, searchQuery, currentFilter) {
+    val detectedPkgs = remember(detectedWakeUpEvents) {
+        detectedWakeUpEvents.filter { !it.isCut }.map { it.packageName }.toSet()
+    }
+
+    val filteredApps = remember(managedApps, searchQuery, currentFilter, detectedPkgs) {
         managedApps.filter { app ->
             val matchesSearch = searchQuery.isBlank() ||
                 app.appName.contains(searchQuery, ignoreCase = true) ||
                 app.packageName.contains(searchQuery, ignoreCase = true)
 
             val hasCutPaths = app.wakeUpDetails.paths.any { it.isCut } || app.wakeUpDetails.isCut
+            val isDetected = detectedPkgs.contains(app.packageName)
             val matchesFilter = when (currentFilter) {
                 "CUT" -> hasCutPaths
                 "ACTIVE" -> !hasCutPaths
+                "DETECTED" -> isDetected
                 else -> true
             }
 
@@ -260,7 +272,7 @@ fun WakeUpPathsManagerDialog(
                 }
             }
 
-            // Search Bar & Filter Chips
+            // Search Bar & Filter Chips: Clicking Search Anywhere opens keyboard!
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -269,9 +281,22 @@ fun WakeUpPathsManagerDialog(
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(searchFocusRequester)
+                        .clickable {
+                            searchFocusRequester.requestFocus()
+                            keyboardController?.show()
+                        },
                     placeholder = { Text("Search apps or wake-ups...") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
+                    leadingIcon = {
+                        IconButton(onClick = {
+                            searchFocusRequester.requestFocus()
+                            keyboardController?.show()
+                        }) {
+                            Icon(Icons.Default.Search, contentDescription = "Search")
+                        }
+                    },
                     trailingIcon = {
                         if (searchQuery.isNotEmpty()) {
                             IconButton(onClick = { searchQuery = "" }) {
@@ -299,10 +324,18 @@ fun WakeUpPathsManagerDialog(
                         label = { Text("All (${managedApps.size})", fontSize = 12.sp) },
                         shape = RoundedCornerShape(8.dp)
                     )
+                    if (detectedPkgs.isNotEmpty()) {
+                        FilterChip(
+                            selected = currentFilter == "DETECTED",
+                            onClick = { currentFilter = "DETECTED" },
+                            label = { Text("Caught in BG 🔥 (${detectedPkgs.size})", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                    }
                     FilterChip(
                         selected = currentFilter == "CUT",
                         onClick = { currentFilter = "CUT" },
-                        label = { Text("Cut / Blocked ($cutAppsCount)", fontSize = 12.sp) },
+                        label = { Text("Cut ($cutAppsCount)", fontSize = 12.sp) },
                         shape = RoundedCornerShape(8.dp)
                     )
                     FilterChip(

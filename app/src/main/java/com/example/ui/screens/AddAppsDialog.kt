@@ -57,7 +57,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -91,6 +94,8 @@ fun AddAppsDialog(
     var currentFilter by remember { mutableStateOf(AddAppFilter.ALL) }
     var showOptionsMenu by remember { mutableStateOf(false) }
     val selectedPackages = remember { mutableStateOf(mutableSetOf<String>()) }
+    val searchFocusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     // Filter candidate apps (exclude already managed apps and apply system filter & sorting)
     val candidateApps = remember(allApps, managedPackageNames, searchQuery, currentFilter, hideSystemApps, sortOption) {
@@ -241,20 +246,30 @@ fun AddAppsDialog(
                 }
             }
 
-            // Search Bar with "X" clear button requested by user!
+            // Search Bar with "X" clear button: Clicking Search Anywhere opens keyboard!
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 6.dp),
+                    .padding(horizontal = 20.dp, vertical = 6.dp)
+                    .focusRequester(searchFocusRequester)
+                    .clickable {
+                        searchFocusRequester.requestFocus()
+                        keyboardController?.show()
+                    },
                 placeholder = { Text("Search installed applications...") },
                 leadingIcon = {
-                    Icon(
-                        imageVector = Icons.Default.Search,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    IconButton(onClick = {
+                        searchFocusRequester.requestFocus()
+                        keyboardController?.show()
+                    }) {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Search",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 },
                 trailingIcon = if (searchQuery.isNotBlank()) {
                     {
