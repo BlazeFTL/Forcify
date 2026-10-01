@@ -392,13 +392,13 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                                     }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Cut Wakeups / Paths", fontWeight = FontWeight.Medium) },
+                                    text = { Text("Monitor Wake-Up Path", fontWeight = FontWeight.Medium) },
                                     onClick = {
                                         showMenu = false
                                         viewModel.openWakeUpManager()
                                     },
                                     leadingIcon = {
-                                        Icon(imageVector = Icons.Default.ContentCut, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                        Icon(imageVector = Icons.Default.Bolt, contentDescription = null, tint = Color(0xFFD97706))
                                     }
                                 )
                                 DropdownMenuItem(
@@ -681,21 +681,6 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                 )
             }
 
-            // Real-time Background Wake-Up Detection Alerts Card (e.g. TeraBox, SyncAdapter, DocumentsProvider starts)
-            val activeDetectedWakeUps = remember(detectedWakeUpEvents) {
-                detectedWakeUpEvents.filter { !it.isCut }
-            }
-
-            AnimatedVisibility(visible = activeDetectedWakeUps.isNotEmpty() && !isMultiSelectMode) {
-                DetectedWakeUpsCard(
-                    events = activeDetectedWakeUps,
-                    onCutPath = { event -> viewModel.cutDetectedWakeUpEvent(event) },
-                    onInspect = { event -> viewModel.openWakeUpForPackage(event.packageName) },
-                    onDismiss = { event -> viewModel.dismissDetectedWakeUpEvent(event) },
-                    onCutAll = { viewModel.cutAllDetectedWakeUps() }
-                )
-            }
-
             if (!isInitialScanCompleted && allManagedApps.isNotEmpty()) {
                 LinearProgressIndicator(
                     modifier = Modifier.fillMaxWidth().height(2.dp),
@@ -830,10 +815,14 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                         }
                         items(filteredNotHibernating, key = { it.packageName }) { app ->
                             val isSelected = selectedPackagesForBatchStop.contains(app.packageName)
+                            val appWakeUpCount = remember(detectedWakeUpEvents, app.packageName) {
+                                detectedWakeUpEvents.count { it.packageName == app.packageName && !it.isCut }
+                            }
                             GreenifyStyleAppCard(
                                 app = app,
                                 isSelectionMode = isMultiSelectMode,
                                 isSelected = isSelected,
+                                detectedWakeUpCount = appWakeUpCount,
                                 onToggleSelect = {
                                     selectedPackagesForBatchStop = if (isSelected) {
                                         selectedPackagesForBatchStop - app.packageName
@@ -847,6 +836,7 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                                 onForceStop = { viewModel.forceStopSingle(app) },
                                 onRun = { viewModel.launchApp(app.packageName) },
                                 onToggleRestrictForeground = { viewModel.toggleRestrictRunningAsForeground(app) },
+                                onToggleMonitorWakeUp = { viewModel.toggleWakeUpMonitoring(app.packageName) },
                                 onOpenWakeup = { viewModel.selectAppForWakeup(app) },
                                 onRemove = { viewModel.removeAppFromFreezeList(app.packageName) },
                                 onToggleIgnoreWorking = { viewModel.toggleIgnoreWorkingState(app) }
@@ -881,10 +871,14 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                         }
                         items(filteredWillHibernateSoon, key = { it.packageName }) { app ->
                             val isSelected = selectedPackagesForBatchStop.contains(app.packageName)
+                            val appWakeUpCount = remember(detectedWakeUpEvents, app.packageName) {
+                                detectedWakeUpEvents.count { it.packageName == app.packageName && !it.isCut }
+                            }
                             GreenifyStyleAppCard(
                                 app = app,
                                 isSelectionMode = isMultiSelectMode,
                                 isSelected = isSelected,
+                                detectedWakeUpCount = appWakeUpCount,
                                 onToggleSelect = {
                                     selectedPackagesForBatchStop = if (isSelected) {
                                         selectedPackagesForBatchStop - app.packageName
@@ -898,6 +892,7 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                                 onForceStop = { viewModel.forceStopSingle(app) },
                                 onRun = { viewModel.launchApp(app.packageName) },
                                 onToggleRestrictForeground = { viewModel.toggleRestrictRunningAsForeground(app) },
+                                onToggleMonitorWakeUp = { viewModel.toggleWakeUpMonitoring(app.packageName) },
                                 onOpenWakeup = { viewModel.selectAppForWakeup(app) },
                                 onRemove = { viewModel.removeAppFromFreezeList(app.packageName) },
                                 onToggleIgnoreWorking = { viewModel.toggleIgnoreWorkingState(app) }
@@ -943,11 +938,15 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                         if (isHibernatedSectionExpanded) {
                             items(filteredHibernated, key = { it.packageName }) { app ->
                                 val isSelected = selectedPackagesForBatchStop.contains(app.packageName)
+                                val appWakeUpCount = remember(detectedWakeUpEvents, app.packageName) {
+                                    detectedWakeUpEvents.count { it.packageName == app.packageName && !it.isCut }
+                                }
                                 GreenifyStyleAppCard(
                                     app = app,
                                     isSelectionMode = isMultiSelectMode,
                                     isSelected = isSelected,
                                     isHibernated = true,
+                                    detectedWakeUpCount = appWakeUpCount,
                                     onToggleSelect = {
                                         selectedPackagesForBatchStop = if (isSelected) {
                                             selectedPackagesForBatchStop - app.packageName
@@ -961,6 +960,7 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                                     onForceStop = { viewModel.forceStopSingle(app) },
                                     onRun = { viewModel.launchApp(app.packageName) },
                                     onToggleRestrictForeground = { viewModel.toggleRestrictRunningAsForeground(app) },
+                                    onToggleMonitorWakeUp = { viewModel.toggleWakeUpMonitoring(app.packageName) },
                                     onOpenWakeup = { viewModel.selectAppForWakeup(app) },
                                     onRemove = { viewModel.removeAppFromFreezeList(app.packageName) },
                                     onToggleIgnoreWorking = { viewModel.toggleIgnoreWorkingState(app) }
@@ -1026,6 +1026,12 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
             },
             onForceStop = { item ->
                 viewModel.forceStopSingle(item)
+            },
+            onToggleMonitor = { enabled ->
+                viewModel.setWakeUpMonitoring(app.packageName, enabled)
+            },
+            onDismissDetectedEvent = { event ->
+                viewModel.dismissDetectedWakeUpEvent(event)
             }
         )
     }
@@ -1081,11 +1087,13 @@ private fun GreenifyStyleAppCard(
     isSelectionMode: Boolean,
     isSelected: Boolean,
     isHibernated: Boolean = false,
+    detectedWakeUpCount: Int = 0,
     onToggleSelect: () -> Unit,
     onLongClick: () -> Unit,
     onForceStop: () -> Unit,
     onRun: () -> Unit,
     onToggleRestrictForeground: () -> Unit,
+    onToggleMonitorWakeUp: () -> Unit = {},
     onOpenWakeup: () -> Unit,
     onRemove: () -> Unit,
     onToggleIgnoreWorking: () -> Unit
@@ -1160,6 +1168,47 @@ private fun GreenifyStyleAppCard(
                         maxLines = 1,
                         modifier = Modifier.weight(1f, fill = false)
                     )
+                    if (detectedWakeUpCount > 0) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color(0xFFFEF3C7))
+                                .border(1.dp, Color(0xFFFDE68A), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Bolt,
+                                    contentDescription = null,
+                                    tint = Color(0xFFD97706),
+                                    modifier = Modifier.size(11.dp)
+                                )
+                                Spacer(modifier = Modifier.width(2.dp))
+                                Text(
+                                    text = "$detectedWakeUpCount Wake-Up${if (detectedWakeUpCount > 1) "s" else ""}",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF92400E)
+                                )
+                            }
+                        }
+                    } else if (app.isWakeUpMonitoringEnabled) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color(0xFFF1F5F9))
+                                .padding(horizontal = 5.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "Monitoring",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFF64748B)
+                            )
+                        }
+                    }
                 }
 
                 if (stateText.isNotBlank()) {
@@ -1263,12 +1312,16 @@ private fun GreenifyStyleAppCard(
                             }
                         )
 
-                        // 2. Inspect Wake-Ups & Paths
+                        // 2. Show Detected Wake-Up Path
                         DropdownMenuItem(
                             text = {
                                 Column {
-                                    Text("Inspect Wake-Ups", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                    Text("${app.wakeUpDetails.paths.size} wake-up path(s) detected", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("Show Detected Wake-Up Path", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                    Text(
+                                        if (app.isWakeUpMonitoringEnabled) "Inspect detected background wake-ups" else "View wake-up path & telemetry",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
                             },
                             onClick = {
@@ -1277,9 +1330,9 @@ private fun GreenifyStyleAppCard(
                             },
                             leadingIcon = {
                                 Icon(
-                                    imageVector = Icons.Default.ContentCut,
+                                    imageVector = Icons.Default.Bolt,
                                     contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
+                                    tint = Color(0xFFD97706),
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -1343,9 +1396,41 @@ private fun GreenifyStyleAppCard(
                             }
                         )
 
+                        // 5. Monitor Wake-Up Path
+                        DropdownMenuItem(
+                            text = {
+                                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                    Text("Monitor Wake-Up Path", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                    Text(
+                                        if (app.isWakeUpMonitoringEnabled) "Monitoring active • Tap app to inspect" else "Catch silent background autostarts",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Bolt,
+                                    contentDescription = null,
+                                    tint = if (app.isWakeUpMonitoringEnabled) Color(0xFFD97706) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            },
+                            trailingIcon = {
+                                Checkbox(
+                                    checked = app.isWakeUpMonitoringEnabled,
+                                    onCheckedChange = { onToggleMonitorWakeUp() },
+                                    colors = CheckboxDefaults.colors(checkedColor = Color(0xFFD97706))
+                                )
+                            },
+                            onClick = {
+                                onToggleMonitorWakeUp()
+                            }
+                        )
+
                         HorizontalDivider(color = Color(0xFFE2E8F0), modifier = Modifier.padding(vertical = 4.dp))
 
-                        // 5. Remove from ForCify
+                        // 6. Remove from ForCify
                         DropdownMenuItem(
                             text = {
                                 Text("Remove from ForCify", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface)

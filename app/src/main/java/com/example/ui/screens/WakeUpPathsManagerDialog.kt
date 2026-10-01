@@ -22,19 +22,15 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.ContentCut
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.FolderShared
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.PowerSettingsNew
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -42,10 +38,9 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -67,19 +62,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.InstalledAppItem
-import com.example.model.WakeUpPath
-import com.example.model.WakeUpPathType
-import com.example.model.WakeUpRiskLevel
 import com.example.ui.components.AppIconImage
 import com.example.ui.viewmodel.PureStopViewModel
 
@@ -91,31 +80,30 @@ fun WakeUpPathsManagerDialog(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val managedApps by viewModel.allManagedApps.collectAsState()
-    val operatingMode = viewModel.preferences.mode
     val detectedWakeUpEvents by viewModel.detectedWakeUpEvents.collectAsState()
 
     var searchQuery by remember { mutableStateOf("") }
-    var selectedPackages by remember { mutableStateOf(setOf<String>()) }
-    var currentFilter by remember { mutableStateOf("ALL") } // ALL, CUT, ACTIVE, DETECTED
-    var expandedPackage by remember { mutableStateOf<String?>(null) }
-    val searchFocusRequester = remember { FocusRequester() }
-    val keyboardController = LocalSoftwareKeyboardController.current
+    var currentFilter by remember { mutableStateOf("ALL") } // ALL, MONITORING, DETECTED
 
-    val detectedPkgs = remember(detectedWakeUpEvents) {
-        detectedWakeUpEvents.filter { !it.isCut }.map { it.packageName }.toSet()
+    val detectedPkgsMap = remember(detectedWakeUpEvents) {
+        val map = mutableMapOf<String, Int>()
+        for (ev in detectedWakeUpEvents.filter { !it.isCut }) {
+            map[ev.packageName] = (map[ev.packageName] ?: 0) + 1
+        }
+        map
     }
 
-    val filteredApps = remember(managedApps, searchQuery, currentFilter, detectedPkgs) {
+    val filteredApps = remember(managedApps, searchQuery, currentFilter, detectedPkgsMap) {
         managedApps.filter { app ->
             val matchesSearch = searchQuery.isBlank() ||
                 app.appName.contains(searchQuery, ignoreCase = true) ||
                 app.packageName.contains(searchQuery, ignoreCase = true)
 
-            val hasCutPaths = app.wakeUpDetails.paths.any { it.isCut } || app.wakeUpDetails.isCut
-            val isDetected = detectedPkgs.contains(app.packageName)
+            val isMonitored = app.isWakeUpMonitoringEnabled
+            val isDetected = (detectedPkgsMap[app.packageName] ?: 0) > 0
+
             val matchesFilter = when (currentFilter) {
-                "CUT" -> hasCutPaths
-                "ACTIVE" -> !hasCutPaths
+                "MONITORING" -> isMonitored
                 "DETECTED" -> isDetected
                 else -> true
             }
@@ -124,7 +112,8 @@ fun WakeUpPathsManagerDialog(
         }
     }
 
-    val cutAppsCount = managedApps.count { it.wakeUpDetails.paths.any { p -> p.isCut } || it.wakeUpDetails.isCut }
+    val monitoredCount = managedApps.count { it.isWakeUpMonitoringEnabled }
+    val detectedAppsCount = detectedPkgsMap.size
     val totalAppsCount = managedApps.size
 
     ModalBottomSheet(
@@ -153,14 +142,14 @@ fun WakeUpPathsManagerDialog(
                     modifier = Modifier
                         .size(42.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primaryContainer),
+                        .background(Color(0xFFFEF3C7)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Default.ContentCut,
-                        contentDescription = "Wake-Up Manager",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(22.dp)
+                        imageVector = Icons.Default.Bolt,
+                        contentDescription = "Wake-Up Monitor",
+                        tint = Color(0xFFD97706),
+                        modifier = Modifier.size(24.dp)
                     )
                 }
 
@@ -168,13 +157,13 @@ fun WakeUpPathsManagerDialog(
 
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Cut Wake-Up Paths",
+                        text = "Wake-Up Path Monitor",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "$cutAppsCount of $totalAppsCount apps have wake-up paths cut",
+                        text = if (monitoredCount > 0) "$monitoredCount of $totalAppsCount apps actively monitored" else "Tick on apps to trace background autostarts",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -191,9 +180,10 @@ fun WakeUpPathsManagerDialog(
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 4.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    containerColor = Color(0xFFFFFBEB)
                 ),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFDE68A))
             ) {
                 Row(
                     modifier = Modifier.padding(12.dp),
@@ -202,77 +192,20 @@ fun WakeUpPathsManagerDialog(
                     Icon(
                         imageVector = Icons.Default.Bolt,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
+                        tint = Color(0xFFD97706),
                         modifier = Modifier.size(20.dp)
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "Select apps and choose which wake-up paths to cut (alarms, syncs, receivers). You can re-attach paths anytime to fix mistakes.",
+                        text = "Tick ON 'Monitor' for any app to catch secret background wake-ups (network, sync, providers). Click any app to see its detected wake-up path.",
                         fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = Color(0xFF92400E),
                         lineHeight = 16.sp
                     )
                 }
             }
 
-            // Quick Recovery Card to undo accidental cuts & fix apps not remembering state
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = Color.White
-                ),
-                shape = RoundedCornerShape(12.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0))
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(32.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Apps not remembering state?",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            text = "One-tap reset all system defaults to fix app memory & recents.",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            lineHeight = 15.sp
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Button(
-                        onClick = { viewModel.resetAllAppOpsToSystemDefault() },
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                        modifier = Modifier.height(32.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                    ) {
-                        Text("Reset", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-
-            // Search Bar & Filter Chips: Clicking Search Anywhere opens keyboard!
+            // Search Bar & Filter Controls
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -281,125 +214,99 @@ fun WakeUpPathsManagerDialog(
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(searchFocusRequester)
-                        .clickable {
-                            searchFocusRequester.requestFocus()
-                            keyboardController?.show()
-                        },
-                    placeholder = { Text("Search apps or wake-ups...") },
+                    placeholder = { Text("Search apps...", fontSize = 13.sp) },
                     leadingIcon = {
-                        IconButton(onClick = {
-                            searchFocusRequester.requestFocus()
-                            keyboardController?.show()
-                        }) {
-                            Icon(Icons.Default.Search, contentDescription = "Search")
-                        }
+                        Icon(Icons.Default.Search, contentDescription = "Search", modifier = Modifier.size(18.dp))
                     },
                     trailingIcon = {
                         if (searchQuery.isNotEmpty()) {
                             IconButton(onClick = { searchQuery = "" }) {
-                                Icon(Icons.Default.Close, contentDescription = "Clear")
+                                Icon(Icons.Default.Close, contentDescription = "Clear", modifier = Modifier.size(16.dp))
                             }
                         }
                     },
-                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp),
                     shape = RoundedCornerShape(12.dp),
+                    singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f),
                         focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
+                        unfocusedBorderColor = Color.Transparent
                     )
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                // Filter Chips
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     FilterChip(
                         selected = currentFilter == "ALL",
                         onClick = { currentFilter = "ALL" },
-                        label = { Text("All (${managedApps.size})", fontSize = 12.sp) },
+                        label = { Text("All ($totalAppsCount)", fontSize = 12.sp) },
                         shape = RoundedCornerShape(8.dp)
                     )
-                    if (detectedPkgs.isNotEmpty()) {
+                    FilterChip(
+                        selected = currentFilter == "MONITORING",
+                        onClick = { currentFilter = "MONITORING" },
+                        label = { Text("Monitoring ($monitoredCount)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold) },
+                        shape = RoundedCornerShape(8.dp),
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFFDCFCE7),
+                            selectedLabelColor = Color(0xFF166534)
+                        )
+                    )
+                    if (detectedAppsCount > 0) {
                         FilterChip(
                             selected = currentFilter == "DETECTED",
                             onClick = { currentFilter = "DETECTED" },
-                            label = { Text("Caught in BG 🔥 (${detectedPkgs.size})", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
-                            shape = RoundedCornerShape(8.dp)
+                            label = { Text("Detected ($detectedAppsCount)", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = Color(0xFFFEF3C7),
+                                selectedLabelColor = Color(0xFF92400E)
+                            )
                         )
                     }
-                    FilterChip(
-                        selected = currentFilter == "CUT",
-                        onClick = { currentFilter = "CUT" },
-                        label = { Text("Cut ($cutAppsCount)", fontSize = 12.sp) },
-                        shape = RoundedCornerShape(8.dp)
-                    )
-                    FilterChip(
-                        selected = currentFilter == "ACTIVE",
-                        onClick = { currentFilter = "ACTIVE" },
-                        label = { Text("Active (${totalAppsCount - cutAppsCount})", fontSize = 12.sp) },
-                        shape = RoundedCornerShape(8.dp)
-                    )
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(4.dp))
 
-                // Select All Checkbox Row
+                // Batch action row
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val allSelected = selectedPackages.isNotEmpty() && selectedPackages.size == filteredApps.size
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable {
-                                selectedPackages = if (allSelected) {
-                                    emptySet()
-                                } else {
-                                    filteredApps.map { it.packageName }.toSet()
-                                }
-                            }
-                            .padding(vertical = 4.dp, horizontal = 2.dp)
-                    ) {
-                        Checkbox(
-                            checked = allSelected,
-                            onCheckedChange = { checked ->
-                                selectedPackages = if (checked) {
-                                    filteredApps.map { it.packageName }.toSet()
-                                } else {
-                                    emptySet()
-                                }
-                            },
-                            colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = if (allSelected) "Deselect All" else "Select All (${filteredApps.size})",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
+                    val allMonitored = filteredApps.isNotEmpty() && filteredApps.all { it.isWakeUpMonitoringEnabled }
+                    Text(
+                        text = if (filteredApps.size == 1) "1 app" else "${filteredApps.size} apps • Tap to inspect",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
-                    // Global Cut Safe button
                     OutlinedButton(
                         onClick = {
-                            val targets = filteredApps.map { it.packageName }
-                            viewModel.cutWakeUpPathsForPackages(targets, safeOnly = true)
+                            val targetState = !allMonitored
+                            for (app in filteredApps) {
+                                viewModel.setWakeUpMonitoring(app.packageName, targetState)
+                            }
                         },
-                        shape = RoundedCornerShape(10.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier.height(28.dp)
                     ) {
-                        Icon(Icons.Default.ContentCut, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Cut Safe Paths", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            text = if (allMonitored) "Turn Off All" else "Monitor All",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
                     }
                 }
             }
@@ -427,331 +334,169 @@ fun WakeUpPathsManagerDialog(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(filteredApps, key = { it.packageName }) { app ->
-                        val isSelected = selectedPackages.contains(app.packageName)
-                        val isExpanded = expandedPackage == app.packageName
+                        val detectedCount = detectedPkgsMap[app.packageName] ?: 0
 
-                        WakeUpAppCard(
+                        WakeUpAppMonitorRow(
                             app = app,
-                            isSelected = isSelected,
-                            isExpanded = isExpanded,
-                            onToggleSelect = {
-                                selectedPackages = if (isSelected) {
-                                    selectedPackages - app.packageName
-                                } else {
-                                    selectedPackages + app.packageName
-                                }
+                            detectedCount = detectedCount,
+                            onClickApp = {
+                                viewModel.selectAppForWakeup(app)
                             },
-                            onToggleExpand = {
-                                expandedPackage = if (isExpanded) null else app.packageName
-                            },
-                            onCutSafe = { viewModel.cutSafeWakeUpPaths(app) },
-                            onCutAll = { viewModel.cutAllWakeUpPaths(app) },
-                            onRestoreAll = { viewModel.restoreAllWakeUpPaths(app) },
-                            onTogglePath = { path, cut ->
-                                viewModel.toggleSpecificWakeUpPath(app, path, cut)
+                            onToggleMonitor = { enabled ->
+                                viewModel.setWakeUpMonitoring(app.packageName, enabled)
                             }
                         )
                     }
                 }
             }
-
-            // Bottom Action Bar when apps are selected
-            AnimatedVisibility(visible = selectedPackages.isNotEmpty()) {
-                Surface(
-                    tonalElevation = 6.dp,
-                    shadowElevation = 8.dp,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        OutlinedButton(
-                            onClick = {
-                                viewModel.restoreWakeUpPathsForPackages(selectedPackages.toList())
-                                selectedPackages = emptySet()
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp)
-                        ) {
-                            Text("Re-attach (${selectedPackages.size})", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                        }
-
-                        Button(
-                            onClick = {
-                                viewModel.cutWakeUpPathsForPackages(selectedPackages.toList(), safeOnly = true)
-                                selectedPackages = emptySet()
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp)
-                        ) {
-                            Text("Cut Safe (${selectedPackages.size})", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                        }
-
-                        Button(
-                            onClick = {
-                                viewModel.cutWakeUpPathsForPackages(selectedPackages.toList(), safeOnly = false)
-                                selectedPackages = emptySet()
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp)
-                        ) {
-                            Text("Cut All (${selectedPackages.size})", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
         }
     }
 }
 
+/**
+ * Clean, modern app card for Wake-Up Path Monitoring.
+ * Instead of cluttered internal options, it gives a direct toggle to "Monitor Wake Up Path",
+ * and clicking the card opens the Detected Wake-Up Path!
+ */
 @Composable
-private fun WakeUpAppCard(
+private fun WakeUpAppMonitorRow(
     app: InstalledAppItem,
-    isSelected: Boolean,
-    isExpanded: Boolean,
-    onToggleSelect: () -> Unit,
-    onToggleExpand: () -> Unit,
-    onCutSafe: () -> Unit,
-    onCutAll: () -> Unit,
-    onRestoreAll: () -> Unit,
-    onTogglePath: (WakeUpPath, Boolean) -> Unit
+    detectedCount: Int,
+    onClickApp: () -> Unit,
+    onToggleMonitor: (Boolean) -> Unit
 ) {
-    val paths = app.wakeUpDetails.paths
-    val cutPathsCount = paths.count { it.isCut }
-    val hasCutPaths = cutPathsCount > 0 || app.wakeUpDetails.isCut
-
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(14.dp))
             .border(
                 width = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
-                shape = RoundedCornerShape(12.dp)
+                color = if (detectedCount > 0) Color(0xFFF59E0B).copy(alpha = 0.5f) else Color(0xFFE2E8F0),
+                shape = RoundedCornerShape(14.dp)
             )
-            .animateContentSize(),
+            .clickable { onClickApp() },
         colors = CardDefaults.cardColors(
-            containerColor = Color.White
+            containerColor = if (detectedCount > 0) Color(0xFFFFFDF5) else Color.White
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onToggleSelect() }
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Checkbox(
-                    checked = isSelected,
-                    onCheckedChange = { onToggleSelect() },
-                    colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary),
-                    modifier = Modifier.padding(end = 2.dp)
-                )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            AppIconImage(drawable = app.icon, appName = app.appName, size = 42.dp)
+            Spacer(modifier = Modifier.width(12.dp))
 
-                AppIconImage(drawable = app.icon, appName = app.appName, size = 40.dp)
-                Spacer(modifier = Modifier.width(10.dp))
-
-                Column(modifier = Modifier.weight(1f)) {
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = app.appName,
-                        fontSize = 14.sp,
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
                     )
-                    Spacer(modifier = Modifier.height(2.dp))
 
-                    if (hasCutPaths) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFF10B981))
-                            )
-                            Spacer(modifier = Modifier.width(5.dp))
+                    if (detectedCount > 0) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color(0xFFFEF3C7))
+                                .border(1.dp, Color(0xFFFDE68A), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Bolt,
+                                    contentDescription = null,
+                                    tint = Color(0xFFD97706),
+                                    modifier = Modifier.size(11.dp)
+                                )
+                                Spacer(modifier = Modifier.width(2.dp))
+                                Text(
+                                    text = "$detectedCount Caught",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF92400E)
+                                )
+                            }
+                        }
+                    } else if (app.isWakeUpMonitoringEnabled) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color(0xFFDCFCE7))
+                                .padding(horizontal = 5.dp, vertical = 2.dp)
+                        ) {
                             Text(
-                                text = if (cutPathsCount == paths.size && paths.isNotEmpty()) "All cut" else "$cutPathsCount / ${paths.size} cut",
-                                fontSize = 11.sp,
+                                text = "Monitoring",
+                                fontSize = 9.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF10B981),
-                                maxLines = 1
+                                color = Color(0xFF166534)
                             )
                         }
-                    } else {
-                        Text(
-                            text = if (paths.isNotEmpty()) "${paths.size} active" else "No paths",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1
-                        )
                     }
                 }
 
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.height(2.dp))
 
-                // Re-attach / Cut Button
-                if (hasCutPaths) {
-                    OutlinedButton(
-                        onClick = onRestoreAll,
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                        modifier = Modifier.height(30.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = MaterialTheme.colorScheme.primary
-                        )
-                    ) {
-                        Text("Re-attach", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
-                } else {
-                    OutlinedButton(
-                        onClick = onCutAll,
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                        modifier = Modifier.height(30.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = Color(0xFFDC2626)
-                        )
-                    ) {
-                        Text("Cut All", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
+                Text(
+                    text = app.packageName,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
 
-                // Expand paths icon button
-                IconButton(onClick = onToggleExpand, modifier = Modifier.size(32.dp)) {
-                    Icon(
-                        imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        contentDescription = "Expand paths",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
+                Spacer(modifier = Modifier.height(2.dp))
+
+                Text(
+                    text = if (detectedCount > 0) "Tap to view detected wake-up path" else if (app.isWakeUpMonitoringEnabled) "Tap to inspect wake-up paths" else "Tick on to monitor wake-ups",
+                    fontSize = 11.sp,
+                    color = if (detectedCount > 0) Color(0xFFD97706) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                )
             }
 
-            // Expanded Paths List
-            if (isExpanded) {
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+            Spacer(modifier = Modifier.width(10.dp))
 
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f))
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "INDIVIDUAL WAKE-UP PATHS (${paths.size})",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-
-                    if (paths.isEmpty()) {
-                        Text(
-                            text = "No specific wake-up paths detected for this app.",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        paths.forEach { path ->
-                            PathItemRow(path = path, onToggle = { cut -> onTogglePath(path, cut) })
-                        }
-                    }
-                }
+            // Prominent Monitor Switch / Checkbox
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Switch(
+                    checked = app.isWakeUpMonitoringEnabled,
+                    onCheckedChange = { onToggleMonitor(it) },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = Color(0xFFD97706),
+                        uncheckedThumbColor = Color(0xFF94A3B8),
+                        uncheckedTrackColor = Color(0xFFE2E8F0)
+                    ),
+                    modifier = Modifier.size(width = 46.dp, height = 28.dp)
+                )
+                Text(
+                    text = if (app.isWakeUpMonitoringEnabled) "Monitor On" else "Monitor Off",
+                    fontSize = 9.sp,
+                    color = if (app.isWakeUpMonitoringEnabled) Color(0xFFD97706) else MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.Medium
+                )
             }
-        }
-    }
-}
 
-@Composable
-private fun PathItemRow(
-    path: WakeUpPath,
-    onToggle: (Boolean) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color.White)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        val icon: ImageVector = when (path.type) {
-            WakeUpPathType.OP_SCHEDULED_ALARM -> Icons.Default.Alarm
-            WakeUpPathType.SERVICE_SYNC_ADAPTER -> Icons.Default.CloudSync
-            WakeUpPathType.RECEIVER_PUSH -> Icons.Default.Bolt
-            WakeUpPathType.PROVIDER_CONTENT, WakeUpPathType.PROVIDER_DOCUMENTS -> Icons.Default.FolderShared
-            else -> Icons.Default.Notifications
-        }
+            Spacer(modifier = Modifier.width(4.dp))
 
-        Box(
-            modifier = Modifier
-                .size(30.dp)
-                .clip(CircleShape)
-                .background(
-                    if (path.isCut) Color(0xFFE2E8F0)
-                    else when (path.riskLevel) {
-                        WakeUpRiskLevel.SAFE -> Color(0xFFDCFCE7)
-                        WakeUpRiskLevel.MODERATE -> Color(0xFFFEF3C7)
-                        WakeUpRiskLevel.RISKY -> Color(0xFFFEE2E2)
-                    }
-                ),
-            contentAlignment = Alignment.Center
-        ) {
             Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = if (path.isCut) Color.Gray
-                else when (path.riskLevel) {
-                    WakeUpRiskLevel.SAFE -> Color(0xFF16A34A)
-                    WakeUpRiskLevel.MODERATE -> Color(0xFFD97706)
-                    WakeUpRiskLevel.RISKY -> Color(0xFFDC2626)
-                },
-                modifier = Modifier.size(16.dp)
+                imageVector = Icons.Default.ChevronRight,
+                contentDescription = "Inspect",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier.size(18.dp)
             )
         }
-
-        Spacer(modifier = Modifier.width(10.dp))
-
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = path.title,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = if (path.isCut) Color.Gray else MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = if (path.isCut) "Cut / Blocked" else "${path.type.name.replace('_', ' ')} • ${path.riskLevel.name.lowercase().replaceFirstChar { it.uppercase() }}",
-                fontSize = 10.sp,
-                color = if (path.isCut) Color(0xFF10B981) else MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-
-        Spacer(modifier = Modifier.width(8.dp))
-
-        Switch(
-            checked = !path.isCut,
-            onCheckedChange = { isEnabled ->
-                onToggle(!isEnabled) // cut if not enabled
-            },
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = MaterialTheme.colorScheme.primary,
-                checkedTrackColor = MaterialTheme.colorScheme.primaryContainer
-            )
-        )
     }
 }

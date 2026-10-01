@@ -126,6 +126,7 @@ data class InstalledAppItem(
     val appSize: Long = 0L,
     val ignoreWorkingState: Boolean = false,
     val isRestrictedForeground: Boolean = false,
+    val isWakeUpMonitoringEnabled: Boolean = false,
     val isStoppedState: Boolean = false,
     val isUnsafeToForceStop: Boolean = false,
     val unsafeReason: String = ""

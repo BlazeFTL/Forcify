@@ -136,7 +136,7 @@ class AppStatusDetector(private val context: Context) {
 
         try {
             val endTime = System.currentTimeMillis()
-            val startTime = endTime - (60 * 60 * 1000L) // Scan last 1 hour
+            val startTime = endTime - (5 * 60 * 1000L) // Ultra-fast scan last 5 mins instead of 1 hour
             val events = usageStatsManager.queryEvents(startTime, endTime)
             val event = UsageEvents.Event()
 
@@ -164,9 +164,10 @@ class AppStatusDetector(private val context: Context) {
                 val start = fgServiceStarts[pkg] ?: 0L
                 val stop = fgServiceStops[pkg] ?: 0L
                 val hasFgService = start > stop && (now - start < 12 * 60 * 60 * 1000L)
-                val isRecent = (now - eventPair.second < 10 * 60 * 1000L) &&
+                val isRecent = (now - eventPair.second < 2 * 60 * 1000L) &&
                     (eventPair.first == UsageEvents.Event.ACTIVITY_RESUMED ||
-                     eventPair.first == UsageEvents.Event.ACTIVITY_PAUSED)
+                     eventPair.first == UsageEvents.Event.ACTIVITY_PAUSED) &&
+                    (eventPair.first != UsageEvents.Event.ACTIVITY_STOPPED)
 
                 map[pkg] = NonRootProcessActivity(
                     lastEventType = eventPair.first,

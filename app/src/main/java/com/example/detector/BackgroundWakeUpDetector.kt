@@ -75,9 +75,9 @@ object BackgroundWakeUpDetector {
         monitorJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 try {
-                    val managedPkgs = preferences.savedManagedPackages
-                    if (managedPkgs.isNotEmpty()) {
-                        scanForWakeUps(context, managedPkgs, preferences)
+                    val monitoredPkgs = preferences.getMonitoredWakeUpPackages()
+                    if (monitoredPkgs.isNotEmpty()) {
+                        scanForWakeUps(context, monitoredPkgs, preferences)
                     }
                 } catch (e: Exception) {
                     // Ignore transient errors
@@ -112,7 +112,7 @@ object BackgroundWakeUpDetector {
                     // Many apps (e.g. TeraBox, cloud storage) wake up 1-5 seconds after network connects
                     scope.launch(Dispatchers.IO) {
                         delay(2000L)
-                        val pkgs = preferences.savedManagedPackages
+                        val pkgs = preferences.getMonitoredWakeUpPackages()
                         if (pkgs.isNotEmpty()) {
                             scanForWakeUps(context, pkgs, preferences)
                         }

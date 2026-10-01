@@ -53,11 +53,19 @@ enum class DashboardFilter {
     HIBERNATED
 }
 
+private data class StaticAppMeta(
+    val appName: String,
+    val icon: android.graphics.drawable.Drawable?,
+    val isUnsafe: Boolean,
+    val unsafeReason: String
+)
+
 class PureStopViewModel(application: Application) : AndroidViewModel(application) {
 
     private val app = application as PureStopApp
     private val database = app.database
     val preferences = app.preferences
+    private val staticAppMetaCache = java.util.concurrent.ConcurrentHashMap<String, StaticAppMeta>()
 
     val detector = AppStatusDetector(application)
     val engine = ForceStopEngine(application, database, preferences)
@@ -266,7 +274,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
         liveMonitoringJob = viewModelScope.launch(Dispatchers.Default) {
             refreshManagedAppsOnly(silent = true)
             while (isActive) {
-                delay(3000)
+                delay(600)
                 refreshManagedAppsOnly(silent = true)
             }
         }
@@ -492,19 +500,34 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                 val resultList = mutableListOf<InstalledAppItem>()
                 for (entity in entities) {
                     try {
-                        val appInfo = pm.getApplicationInfo(entity.packageName, 0)
-                        val appName = pm.getApplicationLabel(appInfo).toString()
-                        preferences.setSavedAppName(entity.packageName, appName)
-                        val icon = AppIconCache.getOrLoad(getApplication(), appInfo)
+                        val meta = staticAppMetaCache[entity.packageName] ?: run {
+                            val appInfo = pm.getApplicationInfo(entity.packageName, 0)
+                            val name = pm.getApplicationLabel(appInfo).toString()
+                            preferences.setSavedAppName(entity.packageName, name)
+                            val ic = AppIconCache.getOrLoad(getApplication(), appInfo)
+                            val (unsafe, reason) = detector.checkUnsafeToForceStop(entity.packageName, name)
+                            val created = StaticAppMeta(name, ic, unsafe, reason)
+                            staticAppMetaCache[entity.packageName] = created
+                            created
+                        }
+
+                        val appName = meta.appName
+                        val icon = meta.icon
+                        val isUnsafe = meta.isUnsafe
+                        val unsafeReason = meta.unsafeReason
 
                         val rootState = rootProcessMap[entity.packageName]
                         val runningProc = runningMap[entity.packageName]
                         val nonRootActivity = nonRootActivityMap[entity.packageName]
                         val isInRecents = (rootState?.isInRecents == true) || (nonRootActivity?.isInRecents == true)
-                        val isFlagStopped = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_STOPPED) != 0
+                        val isFlagStopped = if (runningProc != null || rootState?.isRunning == true || isInRecents) {
+                            false
+                        } else {
+                            try {
+                                (pm.getApplicationInfo(entity.packageName, 0).flags and android.content.pm.ApplicationInfo.FLAG_STOPPED) != 0
+                            } catch (e: Exception) { false }
+                        }
                         val isRecentlyStopped = _manuallyStoppedPackages.contains(entity.packageName)
-
-                        val (isUnsafe, unsafeReason) = detector.checkUnsafeToForceStop(entity.packageName, appName)
 
                         val isWorkingIgnored = preferences.isWorkingStateIgnored(entity.packageName)
                         val isRestrictedForeground = preferences.isRestrictRunningAsForeground(entity.packageName)
@@ -581,6 +604,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                                 freezeCount = entity.freezeCount,
                                 ignoreWorkingState = isWorkingIgnored,
                                 isRestrictedForeground = showRestrictedForeground,
+                                isWakeUpMonitoringEnabled = preferences.isWakeUpMonitoringEnabled(entity.packageName),
                                 isStoppedState = (state == AppState.BACKGROUND_FREE),
                                 isUnsafeToForceStop = isUnsafe,
                                 unsafeReason = unsafeReason
@@ -1224,6 +1248,39 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
 
     fun clearAllDetectedWakeUps() {
         preferences.clearAllDetectedWakeUpEvents()
+    }
+
+    fun toggleWakeUpMonitoring(packageName: String): Boolean {
+        val newState = preferences.toggleWakeUpMonitoring(packageName)
+        _managedAppsFlow.value = _managedAppsFlow.value.map {
+            if (it.packageName == packageName) it.copy(isWakeUpMonitoringEnabled = newState) else it
+        }
+        if (newState) {
+            viewModelScope.launch(Dispatchers.IO) {
+                com.example.detector.BackgroundWakeUpDetector.scanForWakeUps(
+                    getApplication(),
+                    setOf(packageName),
+                    preferences
+                )
+            }
+        }
+        return newState
+    }
+
+    fun setWakeUpMonitoring(packageName: String, enabled: Boolean) {
+        preferences.setWakeUpMonitoring(packageName, enabled)
+        _managedAppsFlow.value = _managedAppsFlow.value.map {
+            if (it.packageName == packageName) it.copy(isWakeUpMonitoringEnabled = enabled) else it
+        }
+        if (enabled) {
+            viewModelScope.launch(Dispatchers.IO) {
+                com.example.detector.BackgroundWakeUpDetector.scanForWakeUps(
+                    getApplication(),
+                    setOf(packageName),
+                    preferences
+                )
+            }
+        }
     }
 
     fun openWakeUpForPackage(packageName: String) {

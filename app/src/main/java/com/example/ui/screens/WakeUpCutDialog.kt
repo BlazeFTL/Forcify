@@ -96,7 +96,9 @@ fun WakeUpCutDialog(
     onCutSafePaths: (InstalledAppItem) -> Unit,
     onCutAllPaths: (InstalledAppItem) -> Unit,
     onRestoreAllPaths: (InstalledAppItem) -> Unit,
-    onForceStop: (InstalledAppItem) -> Unit
+    onForceStop: (InstalledAppItem) -> Unit,
+    onToggleMonitor: (Boolean) -> Unit = {},
+    onDismissDetectedEvent: (com.example.model.DetectedWakeUpEvent) -> Unit = {}
 ) {
     val wakeUpDetails = app.wakeUpDetails
     val paths = wakeUpDetails.paths
@@ -234,86 +236,260 @@ fun WakeUpCutDialog(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Detected Background Wake-Up Card (e.g. TeraBox, SyncService caught starting in background)
-                val detectedWakeUps = remember {
-                    com.example.detector.BackgroundWakeUpDetector.detectedEvents.value
-                        .filter { it.packageName == app.packageName && !it.isCut }
+                // Monitor Wake-Up Path Option Card
+                var isMonitoring by remember(app.packageName, app.isWakeUpMonitoringEnabled) {
+                    mutableStateOf(app.isWakeUpMonitoringEnabled)
                 }
-                if (detectedWakeUps.isNotEmpty()) {
-                    val detected = detectedWakeUps.first()
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFBEB)),
-                        border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFF59E0B)),
-                        shape = RoundedCornerShape(12.dp)
+
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    colors = CardDefaults.cardColors(containerColor = if (isMonitoring) Color(0xFFFFFBEB) else Color(0xFFF8FAFC)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, if (isMonitoring) Color(0xFFFDE68A) else Color(0xFFE2E8F0)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(24.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(0xFFF59E0B)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Bolt,
-                                        contentDescription = null,
-                                        tint = Color.White,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Icon(
+                                    imageVector = Icons.Default.Bolt,
+                                    contentDescription = null,
+                                    tint = if (isMonitoring) Color(0xFFD97706) else Color(0xFF64748B),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = "DETECTED BACKGROUND WAKE-UP VECTOR",
-                                    fontSize = 11.sp,
+                                    text = "Monitor Wake-Up Path",
+                                    fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF92400E)
+                                    color = if (isMonitoring) Color(0xFF92400E) else Color(0xFF334155)
                                 )
                             }
-                            Spacer(modifier = Modifier.height(6.dp))
+                            Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "${detected.pathTitle} (${detected.componentName.substringAfterLast('.')})",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF1E293B)
-                            )
-                            Text(
-                                text = "${detected.triggerContext} • ${detected.formattedTime}",
+                                text = if (isMonitoring) "Actively detecting background autostarts & network triggers" else "Tick on to monitor and record background wake-ups",
                                 fontSize = 11.sp,
                                 color = Color(0xFF64748B)
                             )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Button(
-                                onClick = {
-                                    val matchingPath = paths.find {
-                                        it.componentName.contains(detected.componentName) ||
-                                        detected.componentName.contains(it.componentName) ||
-                                        it.componentName.endsWith(".${detected.componentName.substringAfterLast('.')}")
-                                    } ?: WakeUpPath(
-                                        id = "${app.packageName}:detected:${detected.componentName}",
-                                        packageName = app.packageName,
-                                        type = detected.pathType,
-                                        title = detected.pathTitle,
-                                        componentName = detected.componentName,
-                                        reason = detected.triggerContext,
-                                        isCut = false
-                                    )
-                                    onTogglePath(app, matchingPath, true)
-                                },
-                                modifier = Modifier.fillMaxWidth().height(36.dp),
-                                shape = RoundedCornerShape(8.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706))
+                        }
+                        Switch(
+                            checked = isMonitoring,
+                            onCheckedChange = {
+                                isMonitoring = it
+                                onToggleMonitor(it)
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = Color(0xFFD97706),
+                                uncheckedThumbColor = Color(0xFF94A3B8),
+                                uncheckedTrackColor = Color(0xFFE2E8F0)
+                            )
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Detected Background Wake-Up Card(s) (e.g. TeraBox, SyncService caught starting in background)
+                val detectedWakeUps = remember(app.packageName) {
+                    com.example.detector.BackgroundWakeUpDetector.detectedEvents.value
+                        .filter { it.packageName == app.packageName && !it.isCut }
+                }
+
+                if (detectedWakeUps.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        detectedWakeUps.forEach { detected ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFBEB)),
+                                border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFF59E0B)),
+                                shape = RoundedCornerShape(12.dp)
                             ) {
-                                Icon(Icons.Default.ContentCut, contentDescription = null, modifier = Modifier.size(14.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "Cut This Path Only (${detected.componentName.substringAfterLast('.')})",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.weight(1f),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(24.dp)
+                                                    .clip(CircleShape)
+                                                    .background(Color(0xFFF59E0B)),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Bolt,
+                                                    contentDescription = null,
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(14.dp)
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column {
+                                                Text(
+                                                    text = "DETECTED BACKGROUND WAKE-UP",
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color(0xFF92400E)
+                                                )
+                                                Text(
+                                                    text = "${detected.pathTitle} (${detected.componentName.substringAfterLast('.')})",
+                                                    fontSize = 13.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color(0xFF1E293B)
+                                                )
+                                            }
+                                        }
+                                        IconButton(
+                                            onClick = { onDismissDetectedEvent(detected) },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Close,
+                                                contentDescription = "Dismiss",
+                                                tint = Color(0xFF94A3B8),
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "${detected.triggerContext} • ${detected.formattedTime}",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF64748B)
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Button(
+                                        onClick = {
+                                            val matchingPath = paths.find {
+                                                it.componentName.contains(detected.componentName) ||
+                                                detected.componentName.contains(it.componentName) ||
+                                                it.componentName.endsWith(".${detected.componentName.substringAfterLast('.')}")
+                                            } ?: WakeUpPath(
+                                                id = "${app.packageName}:detected:${detected.componentName}",
+                                                packageName = app.packageName,
+                                                type = detected.pathType,
+                                                title = detected.pathTitle,
+                                                componentName = detected.componentName,
+                                                reason = detected.triggerContext,
+                                                isCut = false
+                                            )
+                                            onTogglePath(app, matchingPath, true)
+                                        },
+                                        modifier = Modifier.fillMaxWidth().height(36.dp),
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706))
+                                    ) {
+                                        Icon(Icons.Default.ContentCut, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "Cut This Path Only (${detected.componentName.substringAfterLast('.')})",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                } else {
+                    // Informative status when no wake-up has occurred yet
+                    if (isMonitoring) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFFF0FDF4)),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFBBF7D0)),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFDCFCE7)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.Bolt, contentDescription = null, tint = Color(0xFF16A34A), modifier = Modifier.size(18.dp))
+                                }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text(
+                                        text = "Wake-Up Monitoring Active",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF166534)
+                                    )
+                                    Text(
+                                        text = "Monitoring background autostarts & network triggers. Once a wake-up occurs, its exact path will appear here.",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF15803D),
+                                        lineHeight = 15.sp
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC)),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFF1F5F9)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.Shield, contentDescription = null, tint = Color(0xFF64748B), modifier = Modifier.size(18.dp))
+                                }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Wake-Up Monitoring Disabled",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF334155)
+                                    )
+                                    Text(
+                                        text = "Tick on 'Monitor Wake-Up Path' above to capture silent background autostarts.",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF64748B),
+                                        lineHeight = 15.sp
+                                    )
+                                }
+                                Button(
+                                    onClick = {
+                                        isMonitoring = true
+                                        onToggleMonitor(true)
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                    modifier = Modifier.height(30.dp)
+                                ) {
+                                    Text("Enable", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }

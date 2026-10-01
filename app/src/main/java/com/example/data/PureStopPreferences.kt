@@ -158,6 +158,33 @@ class PureStopPreferences(context: Context) {
         return getRestrictedForegroundPackages().contains(packageName)
     }
 
+    fun getMonitoredWakeUpPackages(): Set<String> {
+        return prefs.getStringSet("monitored_wakeup_pkgs", emptySet()) ?: emptySet()
+    }
+
+    fun isWakeUpMonitoringEnabled(packageName: String): Boolean {
+        return getMonitoredWakeUpPackages().contains(packageName)
+    }
+
+    fun setWakeUpMonitoring(packageName: String, enabled: Boolean) {
+        val current = getMonitoredWakeUpPackages().toMutableSet()
+        if (enabled) current.add(packageName) else current.remove(packageName)
+        prefs.edit().putStringSet("monitored_wakeup_pkgs", current).apply()
+    }
+
+    fun toggleWakeUpMonitoring(packageName: String): Boolean {
+        val current = getMonitoredWakeUpPackages().toMutableSet()
+        val newState = if (current.contains(packageName)) {
+            current.remove(packageName)
+            false
+        } else {
+            current.add(packageName)
+            true
+        }
+        prefs.edit().putStringSet("monitored_wakeup_pkgs", current).apply()
+        return newState
+    }
+
     fun toggleRestrictRunningAsForeground(packageName: String): Boolean {
         val current = getRestrictedForegroundPackages().toMutableSet()
         val newState = if (current.contains(packageName)) {
