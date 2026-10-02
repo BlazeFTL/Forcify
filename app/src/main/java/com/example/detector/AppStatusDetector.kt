@@ -36,7 +36,17 @@ class AppStatusDetector(private val context: Context) {
     private val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
     private val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
 
+    @Volatile
+    private var cachedUsagePermission: Boolean? = null
+    @Volatile
+    private var lastUsagePermissionCheck: Long = 0L
+
     fun hasUsageStatsPermission(): Boolean {
+        val now = System.currentTimeMillis()
+        val cached = cachedUsagePermission
+        if (cached != null && (now - lastUsagePermissionCheck < 15_000L)) {
+            return cached
+        }
         val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as? AppOpsManager ?: return false
         val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             appOps.unsafeCheckOpNoThrow(
@@ -52,7 +62,10 @@ class AppStatusDetector(private val context: Context) {
                 context.packageName
             )
         }
-        return mode == AppOpsManager.MODE_ALLOWED
+        val allowed = mode == AppOpsManager.MODE_ALLOWED
+        cachedUsagePermission = allowed
+        lastUsagePermissionCheck = now
+        return allowed
     }
 
     fun isSystemApp(pkgInfo: PackageInfo): Boolean {
@@ -83,7 +96,16 @@ class AppStatusDetector(private val context: Context) {
         return isSystemFlag || isUpdatedSystemFlag || isSystemDir || isSystemPrefix
     }
 
+    @Volatile
+    private var cachedAccessibilityPackages: Set<String> = emptySet()
+    @Volatile
+    private var lastAccessibilityCheck: Long = 0L
+
     fun getEnabledAccessibilityPackages(): Set<String> {
+        val now = System.currentTimeMillis()
+        if (now - lastAccessibilityCheck < 10_000L && cachedAccessibilityPackages.isNotEmpty()) {
+            return cachedAccessibilityPackages
+        }
         val result = mutableSetOf<String>()
         try {
             val enabledServices = android.provider.Settings.Secure.getString(
@@ -108,6 +130,8 @@ class AppStatusDetector(private val context: Context) {
         } catch (e: Exception) {
             // Ignore
         }
+        cachedAccessibilityPackages = result
+        lastAccessibilityCheck = now
         return result
     }
 
@@ -136,7 +160,7 @@ class AppStatusDetector(private val context: Context) {
 
         try {
             val endTime = System.currentTimeMillis()
-            val startTime = endTime - (5 * 60 * 1000L) // Ultra-fast scan last 5 mins instead of 1 hour
+            val startTime = endTime - (90 * 1000L) // Ultra-fast scan last 90 seconds instead of 5 minutes
             val events = usageStatsManager.queryEvents(startTime, endTime)
             val event = UsageEvents.Event()
 

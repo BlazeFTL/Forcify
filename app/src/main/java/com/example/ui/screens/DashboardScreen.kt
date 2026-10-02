@@ -77,6 +77,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -393,16 +395,6 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                                     },
                                     leadingIcon = {
                                         Icon(imageVector = Icons.Default.Refresh, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Monitor Wake-Up Path", fontWeight = FontWeight.Medium) },
-                                    onClick = {
-                                        showMenu = false
-                                        viewModel.openWakeUpManager()
-                                    },
-                                    leadingIcon = {
-                                        Icon(imageVector = Icons.Default.Bolt, contentDescription = null, tint = Color(0xFFD97706))
                                     }
                                 )
                                 DropdownMenuItem(
@@ -1141,6 +1133,7 @@ private fun GreenifyStyleAppCard(
     onToggleIgnoreWorking: () -> Unit
 ) {
     var showItemMenu by remember { mutableStateOf(false) }
+    var showAppOptionsDialog by remember { mutableStateOf(false) }
 
     val isWillHibernateSoon = app.state != AppState.FOREGROUND &&
         app.state != AppState.EVADING_RESTRICTIONS &&
@@ -1170,8 +1163,10 @@ private fun GreenifyStyleAppCard(
                 onClick = {
                     if (isSelectionMode) {
                         onToggleSelect()
-                    } else {
+                    } else if (detectedWakeUpCount > 0) {
                         onOpenWakeup()
+                    } else {
+                        showAppOptionsDialog = true
                     }
                 },
                 onLongClick = onLongClick
@@ -1354,97 +1349,52 @@ private fun GreenifyStyleAppCard(
                             }
                         )
 
-                        // 2. Show Detected Wake-Up Path
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text("Show Detected Wake-Up Path", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                    Text(
-                                        if (app.isWakeUpMonitoringEnabled) "Inspect detected background wake-ups" else "View wake-up path & telemetry",
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        // 2. Show Detected Wake-Up Path: Only displayed once wake-up paths have been successfully detected!
+                        if (detectedWakeUpCount > 0) {
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text("Detected Wake-Up Paths", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFFB45309))
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(Color(0xFFFEF3C7))
+                                                    .padding(horizontal = 4.dp, vertical = 1.dp)
+                                            ) {
+                                                Text("$detectedWakeUpCount", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF92400E))
+                                            }
+                                        }
+                                        Text(
+                                            "Inspect and cut caught background wake-ups",
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    showItemMenu = false
+                                    onOpenWakeup()
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.Bolt,
+                                        contentDescription = null,
+                                        tint = Color(0xFFD97706),
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
-                            },
-                            onClick = {
-                                showItemMenu = false
-                                onOpenWakeup()
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.Bolt,
-                                    contentDescription = null,
-                                    tint = Color(0xFFD97706),
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        )
+                            )
+                        }
 
-                        HorizontalDivider(color = Color(0xFFE2E8F0), modifier = Modifier.padding(vertical = 4.dp))
-
-                        // 3. Ignore Working State
-                        DropdownMenuItem(
-                            text = {
-                                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                                    Text("Ignore Working State", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                    Text("Hibernate even if in Recent Tasks or media playback", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.Shield,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            },
-                            trailingIcon = {
-                                Checkbox(
-                                    checked = app.ignoreWorkingState,
-                                    onCheckedChange = { onToggleIgnoreWorking() },
-                                    colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary)
-                                )
-                            },
-                            onClick = {
-                                onToggleIgnoreWorking()
-                            }
-                        )
-
-                        // 4. Restrict Running as Foreground
-                        DropdownMenuItem(
-                            text = {
-                                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                                    Text("Block Foreground Service", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                    Text("Prevent sticky background notifications", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.NotificationsOff,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            },
-                            trailingIcon = {
-                                Checkbox(
-                                    checked = app.isRestrictedForeground,
-                                    onCheckedChange = { onToggleRestrictForeground() },
-                                    colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary)
-                                )
-                            },
-                            onClick = {
-                                onToggleRestrictForeground()
-                            }
-                        )
-
-                        // 5. Monitor Wake-Up Path
+                        // 3. Monitor Wake-Up Path (App Specific)
                         DropdownMenuItem(
                             text = {
                                 Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                                     Text("Monitor Wake-Up Path", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                                     Text(
-                                        if (app.isWakeUpMonitoringEnabled) "Monitoring active • Tap app to inspect" else "Catch silent background autostarts",
+                                        if (app.isWakeUpMonitoringEnabled) "Monitoring active • Catch silent background autostarts" else "Catch silent background autostarts",
                                         fontSize = 11.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -1472,6 +1422,64 @@ private fun GreenifyStyleAppCard(
 
                         HorizontalDivider(color = Color(0xFFE2E8F0), modifier = Modifier.padding(vertical = 4.dp))
 
+                        // 4. Ignore Working State
+                        DropdownMenuItem(
+                            text = {
+                                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                    Text("Ignore Working State", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                    Text("Hibernate even if in Recent Tasks or media playback", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Shield,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            },
+                            trailingIcon = {
+                                Checkbox(
+                                    checked = app.ignoreWorkingState,
+                                    onCheckedChange = { onToggleIgnoreWorking() },
+                                    colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary)
+                                )
+                            },
+                            onClick = {
+                                onToggleIgnoreWorking()
+                            }
+                        )
+
+                        // 5. Restrict Running as Foreground
+                        DropdownMenuItem(
+                            text = {
+                                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                    Text("Block Foreground Service", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                    Text("Prevent sticky background notifications", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.NotificationsOff,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            },
+                            trailingIcon = {
+                                Checkbox(
+                                    checked = app.isRestrictedForeground,
+                                    onCheckedChange = { onToggleRestrictForeground() },
+                                    colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary)
+                                )
+                            },
+                            onClick = {
+                                onToggleRestrictForeground()
+                            }
+                        )
+
+                        HorizontalDivider(color = Color(0xFFE2E8F0), modifier = Modifier.padding(vertical = 4.dp))
+
                         // 6. Remove from ForCify
                         DropdownMenuItem(
                             text = {
@@ -1494,6 +1502,142 @@ private fun GreenifyStyleAppCard(
                 }
             }
         }
+    }
+
+    // App Options Dialog when clicking an app that has no wake-ups detected yet
+    if (showAppOptionsDialog) {
+        AlertDialog(
+            onDismissRequest = { showAppOptionsDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    AppIconImage(drawable = app.icon, appName = app.appName, size = 36.dp)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = app.appName,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp
+                        )
+                        Text(
+                            text = app.packageName,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    // Current State
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(text = "Current State", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            text = if (app.isStoppedState || app.state == AppState.BACKGROUND_FREE) "Hibernated" else app.state.label,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (app.isStoppedState || app.state == AppState.BACKGROUND_FREE) StateFree else StateEvading
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Monitor Wake-Up Path App-Specific Card
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (app.isWakeUpMonitoringEnabled) Color(0xFFFFFBEB) else Color(0xFFF8FAFC)
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (app.isWakeUpMonitoringEnabled) Color(0xFFFDE68A) else Color(0xFFE2E8F0)
+                        ),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Bolt,
+                                        contentDescription = null,
+                                        tint = if (app.isWakeUpMonitoringEnabled) Color(0xFFD97706) else Color(0xFF64748B),
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "Monitor Wake-Up Path",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp,
+                                        color = if (app.isWakeUpMonitoringEnabled) Color(0xFF92400E) else Color(0xFF334155)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = if (app.isWakeUpMonitoringEnabled)
+                                        "Actively monitoring silent background autostarts. Detected wake-ups will appear here."
+                                    else
+                                        "Turn on to monitor and catch silent autostart triggers for ${app.appName}.",
+                                    fontSize = 11.sp,
+                                    color = Color(0xFF64748B)
+                                )
+                            }
+                            Switch(
+                                checked = app.isWakeUpMonitoringEnabled,
+                                onCheckedChange = { onToggleMonitorWakeUp() },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = Color(0xFFD97706)
+                                )
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Button to inspect all component breakdown
+                    OutlinedButton(
+                        onClick = {
+                            showAppOptionsDialog = false
+                            onOpenWakeup()
+                        },
+                        modifier = Modifier.fillMaxWidth().height(38.dp),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Inspect All Component Paths", fontSize = 12.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showAppOptionsDialog = false }) {
+                    Text("Close")
+                }
+            },
+            dismissButton = {
+                if (!app.isStoppedState && app.state != AppState.BACKGROUND_FREE) {
+                    TextButton(onClick = {
+                        showAppOptionsDialog = false
+                        onForceStop()
+                    }) {
+                        Text("Force Stop", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        )
     }
 }
 

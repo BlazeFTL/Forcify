@@ -83,6 +83,17 @@ class PureStopPreferences(context: Context) {
             .apply()
     }
 
+    fun batchSaveAppStates(states: Map<String, Triple<com.example.model.AppState, String, String>>) {
+        if (states.isEmpty()) return
+        val editor = prefs.edit()
+        for ((pkg, triple) in states) {
+            editor.putString("saved_state_$pkg", triple.first.name)
+            editor.putString("saved_detail_$pkg", triple.second)
+            editor.putString("saved_secondary_$pkg", triple.third)
+        }
+        editor.apply()
+    }
+
     fun getSavedStateDetail(packageName: String): String? = prefs.getString("saved_detail_$packageName", null)
     fun getSavedSecondaryDetail(packageName: String): String? = prefs.getString("saved_secondary_$packageName", null)
 

@@ -222,9 +222,9 @@ object BackgroundWakeUpDetector {
             }
         }
 
-        // 2. Also check active dumpsys services and providers for managed packages
-        for (pkg in managedPkgs) {
-            if (pkg == myPkg) continue
+        // 2. Also check active dumpsys services and providers ONLY for monitored packages (avoids 140-iteration lag)
+        val activeMonitoredPkgs = preferences.getMonitoredWakeUpPackages().filter { managedPkgs.contains(it) && it != myPkg }
+        for (pkg in activeMonitoredPkgs) {
             try {
                 val serviceCheckCmd = "dumpsys activity services $pkg | grep -E 'intent=\\{|ServiceRecord'; dumpsys activity providers $pkg | grep -E 'ProviderRecord\\{'; exit 0"
                 val res = RootExecutor.executeCommand(serviceCheckCmd)
