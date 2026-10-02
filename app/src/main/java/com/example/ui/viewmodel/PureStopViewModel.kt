@@ -477,7 +477,10 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
         entities: List<HibernatedAppEntity> = _managedAppEntities.value,
         silent: Boolean = false
     ) {
-        activeRefreshJob?.cancel()
+        if (activeRefreshJob?.isActive == true) {
+            // Already actively computing live status! Avoid thrashing and let it finish smoothly.
+            return
+        }
         activeRefreshJob = viewModelScope.launch(Dispatchers.IO) {
             if (!silent && _managedAppsFlow.value.isEmpty()) _isLoading.value = true
             try {
@@ -492,7 +495,8 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                 val pm = getApplication<Application>().packageManager
                 val runningMap = detector.getRunningProcessesMap()
                 val isRoot = preferences.mode == OperatingMode.ROOT
-                val rootProcessMap = if (isRoot) RootExecutor.queryRootProcessStates() else emptyMap()
+                val targetPkgs = entities.map { it.packageName }.toSet()
+                val rootProcessMap = if (isRoot) RootExecutor.queryRootProcessStates(targetPkgs) else emptyMap()
                 val nonRootActivityMap: Map<String, com.example.detector.NonRootProcessActivity> =
                     if (!isRoot) detector.getNonRootActivityMap() else emptyMap()
                 val enabledAccessibilityPkgs = detector.getEnabledAccessibilityPackages()
@@ -1425,5 +1429,102 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
                 context.startActivity(intent)
             } catch (e2: Exception) {}
         }
+    }
+
+    // --- Export / Import App List Feature ---
+    private val _showExportDialog = MutableStateFlow(false)
+    val showExportDialog: StateFlow<Boolean> = _showExportDialog.asStateFlow()
+
+    private val _showImportDialog = MutableStateFlow(false)
+    val showImportDialog: StateFlow<Boolean> = _showImportDialog.asStateFlow()
+
+    fun openExportDialog() { _showExportDialog.value = true }
+    fun closeExportDialog() { _showExportDialog.value = false }
+    fun openImportDialog() { _showImportDialog.value = true }
+    fun closeImportDialog() { _showImportDialog.value = false }
+
+    fun exportPackageNamesList(): List<String> {
+        val pkgs = _managedAppEntities.value.map { it.packageName }
+        return if (pkgs.isNotEmpty()) pkgs else preferences.savedManagedPackages.toList()
+    }
+
+    fun exportPackageNamesText(): String {
+        return exportPackageNamesList().joinToString("\n")
+    }
+
+    fun exportPackageNamesJson(): String {
+        val list = exportPackageNamesList()
+        val jsonArray = org.json.JSONArray()
+        for (pkg in list) {
+            jsonArray.put(pkg)
+        }
+        return jsonArray.toString(2)
+    }
+
+    fun importPackageNamesFromRaw(rawInput: String): Triple<Int, Int, List<String>> {
+        val pm = getApplication<Application>().packageManager
+        val candidates = mutableSetOf<String>()
+
+        // 1. Try parsing JSON array
+        try {
+            val trimmed = rawInput.trim()
+            if (trimmed.startsWith("[")) {
+                val arr = org.json.JSONArray(trimmed)
+                for (i in 0 until arr.length()) {
+                    val p = arr.optString(i, "").trim()
+                    if (p.isNotBlank()) candidates.add(p)
+                }
+            }
+        } catch (e: Exception) {
+            // Not JSON
+        }
+
+        // 2. Extract standard Android package names using Regex
+        val regex = Regex("([a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)+)")
+        for (match in regex.findAll(rawInput)) {
+            val p = match.value.trim()
+            if (!p.startsWith("android.permission") && !p.startsWith("com.android.internal")) {
+                candidates.add(p)
+            }
+        }
+
+        val existing = _managedAppEntities.value.map { it.packageName }.toSet()
+        val toAddEntities = mutableListOf<HibernatedAppEntity>()
+        val missingInstalled = mutableListOf<String>()
+        var alreadyExistingCount = 0
+
+        for (pkg in candidates) {
+            if (existing.contains(pkg)) {
+                alreadyExistingCount++
+                continue
+            }
+            try {
+                val appInfo = pm.getApplicationInfo(pkg, 0)
+                val appName = pm.getApplicationLabel(appInfo).toString()
+                val isSystem = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+                toAddEntities.add(
+                    HibernatedAppEntity(
+                        packageName = pkg,
+                        appName = appName,
+                        isAutoFreeze = true,
+                        cutWakeups = false,
+                        isSystemApp = isSystem
+                    )
+                )
+            } catch (e: Exception) {
+                missingInstalled.add(pkg)
+            }
+        }
+
+        if (toAddEntities.isNotEmpty()) {
+            viewModelScope.launch {
+                database.appDao().insertApps(toAddEntities)
+                preferences.savedManagedPackages = (preferences.savedManagedPackages + toAddEntities.map { it.packageName }).toSet()
+                _statusMessage.value = "Imported ${toAddEntities.size} app(s) to ForCify"
+                refreshManagedAppsOnly()
+            }
+        }
+
+        return Triple(toAddEntities.size, alreadyExistingCount, missingInstalled)
     }
 }

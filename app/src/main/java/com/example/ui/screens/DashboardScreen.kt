@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Memory
@@ -48,6 +49,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -138,6 +140,8 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
     val isLoadingRam by viewModel.isLoadingRam.collectAsState()
     val hideSystemAppsInRam by viewModel.hideSystemAppsInRam.collectAsState()
     val hibernatedPackageNames by viewModel.hibernatedPackageNames.collectAsState()
+    val showExportDialog by viewModel.showExportDialog.collectAsState()
+    val showImportDialog by viewModel.showImportDialog.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
     var showMenu by remember { mutableStateOf(false) }
@@ -419,6 +423,27 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                                     },
                                     leadingIcon = {
                                         Icon(imageVector = Icons.Default.Memory, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                    }
+                                )
+                                HorizontalDivider(color = Color(0xFFE2E8F0))
+                                DropdownMenuItem(
+                                    text = { Text("Export App List", fontWeight = FontWeight.Medium) },
+                                    onClick = {
+                                        showMenu = false
+                                        viewModel.openExportDialog()
+                                    },
+                                    leadingIcon = {
+                                        Icon(imageVector = Icons.Default.Upload, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Import App List", fontWeight = FontWeight.Medium) },
+                                    onClick = {
+                                        showMenu = false
+                                        viewModel.openImportDialog()
+                                    },
+                                    leadingIcon = {
+                                        Icon(imageVector = Icons.Default.Download, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                     }
                                 )
                                 HorizontalDivider(color = Color(0xFFE2E8F0))
@@ -710,7 +735,8 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                     // Truly empty state when no apps are added yet
                     EmptyStateView(
                         isSearchActive = searchQuery.isNotBlank(),
-                        onAddApps = { viewModel.openAddApps() }
+                        onAddApps = { viewModel.openAddApps() },
+                        onImportApps = { viewModel.openImportDialog() }
                     )
                 }
             } else if (searchQuery.isNotBlank() && filteredNotHibernating.isEmpty() && filteredWillHibernateSoon.isEmpty() && filteredHibernated.isEmpty()) {
@@ -1068,6 +1094,22 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
             onDismiss = { viewModel.closeRamUsageDialog() },
             onRefresh = { viewModel.refreshRamUsage() },
             onStopApp = { pkg -> viewModel.stopAppFromRam(pkg) }
+        )
+    }
+
+    // App List Export Dialog
+    if (showExportDialog) {
+        AppListExportDialog(
+            viewModel = viewModel,
+            onDismiss = { viewModel.closeExportDialog() }
+        )
+    }
+
+    // App List Import Dialog
+    if (showImportDialog) {
+        AppListImportDialog(
+            viewModel = viewModel,
+            onDismiss = { viewModel.closeImportDialog() }
         )
     }
 }
@@ -1522,7 +1564,8 @@ private fun AllHibernatedCleanCard(
 @Composable
 private fun EmptyStateView(
     isSearchActive: Boolean,
-    onAddApps: () -> Unit
+    onAddApps: () -> Unit,
+    onImportApps: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier
@@ -1564,14 +1607,29 @@ private fun EmptyStateView(
             lineHeight = 18.sp
         )
         Spacer(modifier = Modifier.height(20.dp))
-        Button(
-            onClick = onAddApps,
-            shape = RoundedCornerShape(10.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(imageVector = Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("Add Apps to Freeze List", fontWeight = FontWeight.Bold)
+            Button(
+                onClick = onAddApps,
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+            ) {
+                Icon(imageVector = Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Add Apps", fontWeight = FontWeight.Bold)
+            }
+            if (!isSearchActive) {
+                OutlinedButton(
+                    onClick = onImportApps,
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(imageVector = Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Import List", fontWeight = FontWeight.SemiBold)
+                }
+            }
         }
     }
 }
