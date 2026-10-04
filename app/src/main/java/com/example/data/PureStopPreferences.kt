@@ -237,7 +237,7 @@ class PureStopPreferences(context: Context) {
                     )
                 )
             }
-            list
+            list.filter { isWakeUpMonitoringEnabled(it.packageName) }
         } catch (e: Exception) {
             emptyList()
         }

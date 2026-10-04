@@ -190,20 +190,22 @@ fun WakeUpCutDialog(
                         horizontalArrangement = Arrangement.SpaceAround,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = "${wakeUpDetails.wakeupCount24h}",
-                                fontSize = 20.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                text = "24h Launches",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                        if (app.isWakeUpMonitoringEnabled) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = "${wakeUpDetails.wakeupCount24h}",
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = "24h Launches",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Box(modifier = Modifier.width(1.dp).height(28.dp).background(MaterialTheme.colorScheme.outlineVariant))
                         }
-                        Box(modifier = Modifier.width(1.dp).height(28.dp).background(MaterialTheme.colorScheme.outlineVariant))
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
                                 text = "${wakeUpDetails.primaryCulpritsCount}",
@@ -236,67 +238,14 @@ fun WakeUpCutDialog(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Monitor Wake-Up Path Option Card
-                var isMonitoring by remember(app.packageName, app.isWakeUpMonitoringEnabled) {
-                    mutableStateOf(app.isWakeUpMonitoringEnabled)
-                }
-
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    colors = CardDefaults.cardColors(containerColor = if (isMonitoring) Color(0xFFFFFBEB) else Color(0xFFF8FAFC)),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, if (isMonitoring) Color(0xFFFDE68A) else Color(0xFFE2E8F0)),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.Bolt,
-                                    contentDescription = null,
-                                    tint = if (isMonitoring) Color(0xFFD97706) else Color(0xFF64748B),
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "Monitor Wake-Up Path",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isMonitoring) Color(0xFF92400E) else Color(0xFF334155)
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = if (isMonitoring) "Actively detecting background autostarts & network triggers" else "Tick on to monitor and record background wake-ups",
-                                fontSize = 11.sp,
-                                color = Color(0xFF64748B)
-                            )
-                        }
-                        Switch(
-                            checked = isMonitoring,
-                            onCheckedChange = {
-                                isMonitoring = it
-                                onToggleMonitor(it)
-                            },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color.White,
-                                checkedTrackColor = Color(0xFFD97706),
-                                uncheckedThumbColor = Color(0xFF94A3B8),
-                                uncheckedTrackColor = Color(0xFFE2E8F0)
-                            )
-                        )
+                // Detected Background Wake-Up Card(s) (only displayed if monitoring is actively enabled for this specific app)
+                val detectedWakeUps = remember(app.packageName, app.isWakeUpMonitoringEnabled) {
+                    if (app.isWakeUpMonitoringEnabled) {
+                        com.example.detector.BackgroundWakeUpDetector.detectedEvents.value
+                            .filter { it.packageName == app.packageName && !it.isCut }
+                    } else {
+                        emptyList()
                     }
-                }
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                // Detected Background Wake-Up Card(s) (e.g. TeraBox, SyncService caught starting in background)
-                val detectedWakeUps = remember(app.packageName) {
-                    com.example.detector.BackgroundWakeUpDetector.detectedEvents.value
-                        .filter { it.packageName == app.packageName && !it.isCut }
                 }
 
                 if (detectedWakeUps.isNotEmpty()) {
@@ -399,96 +348,6 @@ fun WakeUpCutDialog(
                                             fontWeight = FontWeight.Bold
                                         )
                                     }
-                                }
-                            }
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(6.dp))
-                } else {
-                    // Informative status when no wake-up has occurred yet
-                    if (isMonitoring) {
-                        Card(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFFF0FDF4)),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFBBF7D0)),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(32.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(0xFFDCFCE7)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(Icons.Default.Bolt, contentDescription = null, tint = Color(0xFF16A34A), modifier = Modifier.size(18.dp))
-                                }
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column {
-                                    Text(
-                                        text = "Wake-Up Monitoring Active",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFF166534)
-                                    )
-                                    Text(
-                                        text = "Monitoring background autostarts & network triggers. Once a wake-up occurs, its exact path will appear here.",
-                                        fontSize = 11.sp,
-                                        color = Color(0xFF15803D),
-                                        lineHeight = 15.sp
-                                    )
-                                }
-                            }
-                        }
-                    } else {
-                        Card(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC)),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0)),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(32.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(0xFFF1F5F9)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(Icons.Default.Shield, contentDescription = null, tint = Color(0xFF64748B), modifier = Modifier.size(18.dp))
-                                }
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "Wake-Up Monitoring Disabled",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFF334155)
-                                    )
-                                    Text(
-                                        text = "Tick on 'Monitor Wake-Up Path' above to capture silent background autostarts.",
-                                        fontSize = 11.sp,
-                                        color = Color(0xFF64748B),
-                                        lineHeight = 15.sp
-                                    )
-                                }
-                                Button(
-                                    onClick = {
-                                        isMonitoring = true
-                                        onToggleMonitor(true)
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
-                                    shape = RoundedCornerShape(8.dp),
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                    modifier = Modifier.height(30.dp)
-                                ) {
-                                    Text("Enable", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }

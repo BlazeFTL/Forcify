@@ -291,6 +291,9 @@ object BackgroundWakeUpDetector {
     ) {
         if (!managedPkgs.contains(pkgCandidate) || pkgCandidate == myPkg) return
 
+        // Strictly only record wake-up events if the user explicitly enabled wake-up monitoring for this specific app
+        if (!preferences.isWakeUpMonitoringEnabled(pkgCandidate)) return
+
         // Skip user-opened activities (MainActivity / launcher activity)
         if (startType.contains("activity", ignoreCase = true) || startType.contains("top-activity", ignoreCase = true)) {
             return

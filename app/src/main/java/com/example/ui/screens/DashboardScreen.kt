@@ -833,8 +833,12 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                         }
                         items(filteredNotHibernating, key = { it.packageName }) { app ->
                             val isSelected = selectedPackagesForBatchStop.contains(app.packageName)
-                            val appWakeUpCount = remember(detectedWakeUpEvents, app.packageName) {
-                                detectedWakeUpEvents.count { it.packageName == app.packageName && !it.isCut }
+                            val appWakeUpCount = remember(detectedWakeUpEvents, app.packageName, app.isWakeUpMonitoringEnabled) {
+                                if (app.isWakeUpMonitoringEnabled) {
+                                    detectedWakeUpEvents.count { it.packageName == app.packageName && !it.isCut }
+                                } else {
+                                    0
+                                }
                             }
                             GreenifyStyleAppCard(
                                 app = app,
@@ -889,8 +893,12 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                         }
                         items(filteredWillHibernateSoon, key = { it.packageName }) { app ->
                             val isSelected = selectedPackagesForBatchStop.contains(app.packageName)
-                            val appWakeUpCount = remember(detectedWakeUpEvents, app.packageName) {
-                                detectedWakeUpEvents.count { it.packageName == app.packageName && !it.isCut }
+                            val appWakeUpCount = remember(detectedWakeUpEvents, app.packageName, app.isWakeUpMonitoringEnabled) {
+                                if (app.isWakeUpMonitoringEnabled) {
+                                    detectedWakeUpEvents.count { it.packageName == app.packageName && !it.isCut }
+                                } else {
+                                    0
+                                }
                             }
                             GreenifyStyleAppCard(
                                 app = app,
@@ -956,8 +964,12 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                         if (isHibernatedSectionExpanded) {
                             items(filteredHibernated, key = { it.packageName }) { app ->
                                 val isSelected = selectedPackagesForBatchStop.contains(app.packageName)
-                                val appWakeUpCount = remember(detectedWakeUpEvents, app.packageName) {
-                                    detectedWakeUpEvents.count { it.packageName == app.packageName && !it.isCut }
+                                val appWakeUpCount = remember(detectedWakeUpEvents, app.packageName, app.isWakeUpMonitoringEnabled) {
+                                    if (app.isWakeUpMonitoringEnabled) {
+                                        detectedWakeUpEvents.count { it.packageName == app.packageName && !it.isCut }
+                                    } else {
+                                        0
+                                    }
                                 }
                                 GreenifyStyleAppCard(
                                     app = app,
@@ -1133,7 +1145,6 @@ private fun GreenifyStyleAppCard(
     onToggleIgnoreWorking: () -> Unit
 ) {
     var showItemMenu by remember { mutableStateOf(false) }
-    var showAppOptionsDialog by remember { mutableStateOf(false) }
 
     val isWillHibernateSoon = app.state != AppState.FOREGROUND &&
         app.state != AppState.EVADING_RESTRICTIONS &&
@@ -1163,10 +1174,8 @@ private fun GreenifyStyleAppCard(
                 onClick = {
                     if (isSelectionMode) {
                         onToggleSelect()
-                    } else if (detectedWakeUpCount > 0) {
-                        onOpenWakeup()
                     } else {
-                        showAppOptionsDialog = true
+                        onOpenWakeup()
                     }
                 },
                 onLongClick = onLongClick
@@ -1502,142 +1511,6 @@ private fun GreenifyStyleAppCard(
                 }
             }
         }
-    }
-
-    // App Options Dialog when clicking an app that has no wake-ups detected yet
-    if (showAppOptionsDialog) {
-        AlertDialog(
-            onDismissRequest = { showAppOptionsDialog = false },
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    AppIconImage(drawable = app.icon, appName = app.appName, size = 36.dp)
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column {
-                        Text(
-                            text = app.appName,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp
-                        )
-                        Text(
-                            text = app.packageName,
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            },
-            text = {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    // Current State
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                            .padding(horizontal = 10.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(text = "Current State", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(
-                            text = if (app.isStoppedState || app.state == AppState.BACKGROUND_FREE) "Hibernated" else app.state.label,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (app.isStoppedState || app.state == AppState.BACKGROUND_FREE) StateFree else StateEvading
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Monitor Wake-Up Path App-Specific Card
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (app.isWakeUpMonitoringEnabled) Color(0xFFFFFBEB) else Color(0xFFF8FAFC)
-                        ),
-                        border = androidx.compose.foundation.BorderStroke(
-                            1.dp,
-                            if (app.isWakeUpMonitoringEnabled) Color(0xFFFDE68A) else Color(0xFFE2E8F0)
-                        ),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.Bolt,
-                                        contentDescription = null,
-                                        tint = if (app.isWakeUpMonitoringEnabled) Color(0xFFD97706) else Color(0xFF64748B),
-                                        modifier = Modifier.size(15.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = "Monitor Wake-Up Path",
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 13.sp,
-                                        color = if (app.isWakeUpMonitoringEnabled) Color(0xFF92400E) else Color(0xFF334155)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = if (app.isWakeUpMonitoringEnabled)
-                                        "Actively monitoring silent background autostarts. Detected wake-ups will appear here."
-                                    else
-                                        "Turn on to monitor and catch silent autostart triggers for ${app.appName}.",
-                                    fontSize = 11.sp,
-                                    color = Color(0xFF64748B)
-                                )
-                            }
-                            Switch(
-                                checked = app.isWakeUpMonitoringEnabled,
-                                onCheckedChange = { onToggleMonitorWakeUp() },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = Color.White,
-                                    checkedTrackColor = Color(0xFFD97706)
-                                )
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Button to inspect all component breakdown
-                    OutlinedButton(
-                        onClick = {
-                            showAppOptionsDialog = false
-                            onOpenWakeup()
-                        },
-                        modifier = Modifier.fillMaxWidth().height(38.dp),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Icon(imageVector = Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Inspect All Component Paths", fontSize = 12.sp)
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showAppOptionsDialog = false }) {
-                    Text("Close")
-                }
-            },
-            dismissButton = {
-                if (!app.isStoppedState && app.state != AppState.BACKGROUND_FREE) {
-                    TextButton(onClick = {
-                        showAppOptionsDialog = false
-                        onForceStop()
-                    }) {
-                        Text("Force Stop", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        )
     }
 }
 

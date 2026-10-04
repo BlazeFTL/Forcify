@@ -272,10 +272,11 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
     fun startLiveMonitoring() {
         if (liveMonitoringJob?.isActive == true) return
         liveMonitoringJob = viewModelScope.launch(Dispatchers.Default) {
-            refreshManagedAppsOnly(silent = true)
             while (isActive) {
-                delay(600)
-                refreshManagedAppsOnly(silent = true)
+                delay(1500)
+                if (activeRefreshJob?.isActive != true) {
+                    refreshManagedAppsOnly(silent = true)
+                }
             }
         }
     }
@@ -433,7 +434,11 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
         val list = mutableListOf<InstalledAppItem>()
         for (pkg in savedPkgs) {
             try {
-                val appInfo = installedAppsMap[pkg]
+                val appInfo = installedAppsMap[pkg] ?: try {
+                    pm.getApplicationInfo(pkg, 0)
+                } catch (e: Exception) {
+                    null
+                }
                 val appName = preferences.getSavedAppName(pkg) ?: if (appInfo != null) pm.getApplicationLabel(appInfo).toString() else pkg
                 val icon = if (appInfo != null) AppIconCache.getOrLoad(getApplication(), appInfo) else null
                 
@@ -498,10 +503,7 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
         entities: List<HibernatedAppEntity> = _managedAppEntities.value,
         silent: Boolean = false
     ) {
-        if (activeRefreshJob?.isActive == true) {
-            // Already actively computing live status! Avoid thrashing.
-            return
-        }
+        activeRefreshJob?.cancel()
         activeRefreshJob = viewModelScope.launch(Dispatchers.IO) {
             if (!silent && _managedAppsFlow.value.isEmpty()) _isLoading.value = true
             try {
@@ -536,7 +538,11 @@ class PureStopViewModel(application: Application) : AndroidViewModel(application
 
                 for (entity in entities) {
                     try {
-                        val appInfo = installedAppsMap[entity.packageName]
+                        val appInfo = installedAppsMap[entity.packageName] ?: try {
+                            pm.getApplicationInfo(entity.packageName, 0)
+                        } catch (e: Exception) {
+                            null
+                        }
                         val meta = staticAppMetaCache[entity.packageName] ?: run {
                             val name = preferences.getSavedAppName(entity.packageName)
                                 ?: if (appInfo != null) pm.getApplicationLabel(appInfo).toString() else entity.packageName
