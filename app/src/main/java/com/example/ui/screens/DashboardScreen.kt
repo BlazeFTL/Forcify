@@ -1200,7 +1200,12 @@ private fun GreenifyStyleAppCard(
                 )
             }
 
-            AppIconImage(drawable = app.icon, appName = app.appName, size = 44.dp)
+            AppIconImage(
+                drawable = app.icon,
+                appName = app.appName,
+                size = 44.dp,
+                packageName = app.packageName
+            )
             Spacer(modifier = Modifier.width(12.dp))
 
             // Greenify Style Title & Subtitle

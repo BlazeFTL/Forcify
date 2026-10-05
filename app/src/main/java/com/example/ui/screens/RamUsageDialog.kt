@@ -432,7 +432,12 @@ private fun AppRamItemCard(
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            AppIconImage(drawable = app.icon, appName = app.appName, size = 38.dp)
+            AppIconImage(
+                drawable = app.icon,
+                appName = app.appName,
+                size = 38.dp,
+                packageName = app.packageName
+            )
             Spacer(modifier = Modifier.width(12.dp))
 
             Column(modifier = Modifier.weight(1f)) {

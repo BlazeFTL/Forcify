@@ -20,6 +20,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -56,6 +57,70 @@ class ForCifyDaemonService : Service() {
             scope = serviceScope,
             preferences = preferences
         )
+
+        // Continuous lightweight background state sync (Greenify style)
+        startBackgroundStateSync()
+    }
+
+    private var stateSyncJob: Job? = null
+
+    private fun startBackgroundStateSync() {
+        if (stateSyncJob?.isActive == true) return
+        stateSyncJob = serviceScope.launch {
+            while (isActive) {
+                try {
+                    val managedPkgs = preferences.savedManagedPackages
+                    if (managedPkgs.isNotEmpty()) {
+                        val isRoot = preferences.mode == OperatingMode.ROOT
+                        val pm = applicationContext.packageManager
+                        val installedAppsMap = try {
+                            pm.getInstalledApplications(0).associateBy { it.packageName }
+                        } catch (e: Exception) {
+                            emptyMap()
+                        }
+                        val rootProcessMap = if (isRoot) RootExecutor.queryRootProcessStates(managedPkgs) else emptyMap()
+                        val am = applicationContext.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
+                        val runningProcs = try {
+                            am?.runningAppProcesses?.flatMap { proc -> (proc.pkgList ?: emptyArray()).map { it to proc } }?.toMap() ?: emptyMap()
+                        } catch (e: Exception) {
+                            emptyMap()
+                        }
+
+                        val statesToSave = mutableMapOf<String, Triple<com.example.model.AppState, String, String>>()
+                        for (pkg in managedPkgs) {
+                            val appInfo = installedAppsMap[pkg]
+                            val isOsFlagStopped = if (appInfo != null) {
+                                (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_STOPPED) != 0
+                            } else false
+                            val rootState = rootProcessMap[pkg]
+                            val runningProc = runningProcs[pkg]
+                            val isRunning = rootState?.isRunning == true || runningProc != null
+                            val isInRecents = rootState?.isInRecents == true
+
+                            if (isOsFlagStopped && !isRunning && !isInRecents) {
+                                statesToSave[pkg] = Triple(com.example.model.AppState.BACKGROUND_FREE, "Hibernated", "")
+                            } else if (isRunning) {
+                                val isTop = rootState?.isTop == true || runningProc?.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+                                val isFgService = rootState?.isForegroundService == true || runningProc?.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE
+                                if (isTop) {
+                                    statesToSave[pkg] = Triple(com.example.model.AppState.FOREGROUND, "Running in Foreground", "")
+                                } else if (isFgService) {
+                                    statesToSave[pkg] = Triple(com.example.model.AppState.WORKING_STATE, "Foreground Service", "")
+                                } else {
+                                    statesToSave[pkg] = Triple(com.example.model.AppState.BACKGROUND_RUNNING, "Running in Background", "")
+                                }
+                            } else {
+                                statesToSave[pkg] = Triple(com.example.model.AppState.BACKGROUND_FREE, "Hibernated", "")
+                            }
+                        }
+                        preferences.batchSaveAppStates(statesToSave)
+                    }
+                } catch (e: Exception) {
+                    // Ignore background state sync exceptions
+                }
+                delay(3500L)
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

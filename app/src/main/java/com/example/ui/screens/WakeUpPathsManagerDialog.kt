@@ -386,7 +386,12 @@ private fun WakeUpAppMonitorRow(
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            AppIconImage(drawable = app.icon, appName = app.appName, size = 42.dp)
+            AppIconImage(
+                drawable = app.icon,
+                appName = app.appName,
+                size = 42.dp,
+                packageName = app.packageName
+            )
             Spacer(modifier = Modifier.width(12.dp))
 
             Column(modifier = Modifier.weight(1f)) {

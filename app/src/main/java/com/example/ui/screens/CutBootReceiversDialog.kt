@@ -474,7 +474,12 @@ private fun BootReceiverAppCard(
                 modifier = Modifier.padding(end = 4.dp)
             )
 
-            AppIconImage(drawable = app.icon, appName = app.appName, size = 42.dp)
+            AppIconImage(
+                drawable = app.icon,
+                appName = app.appName,
+                size = 42.dp,
+                packageName = app.packageName
+            )
             Spacer(modifier = Modifier.width(12.dp))
 
             Column(modifier = Modifier.weight(1f)) {

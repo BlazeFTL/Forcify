@@ -43,18 +43,39 @@ object AppIconCache {
                     val drawable = BitmapDrawable(context.resources, bitmap)
                     memoryCache[packageName] = drawable
                     return drawable
+                } else {
+                    diskFile.delete()
                 }
             } catch (e: Exception) {
-                // If disk file is corrupted, fall through to PackageManager
+                diskFile.delete()
             }
         }
 
         return try {
             val pm = context.packageManager
-            val appInfo = pm.getApplicationInfo(packageName, 0)
-            val drawable = pm.getApplicationIcon(appInfo)
-            memoryCache[packageName] = drawable
-            saveIconToDiskAsync(context, packageName, drawable)
+            val launchIntent = pm.getLaunchIntentForPackage(packageName)
+            val launchComponent = launchIntent?.component
+
+            val appInfo = try {
+                pm.getApplicationInfo(packageName, 0)
+            } catch (e: Exception) {
+                null
+            }
+
+            val drawable = (launchComponent?.let {
+                try { pm.getActivityIcon(it) } catch (e: Exception) { null }
+            }) ?: appInfo?.loadIcon(pm)
+                ?: try {
+                    pm.getApplicationIcon(packageName)
+                } catch (e: Exception) {
+                    null
+                }
+                ?: appInfo?.loadUnbadgedIcon(pm)
+
+            if (drawable != null) {
+                memoryCache[packageName] = drawable
+                saveIconToDiskAsync(context, packageName, drawable)
+            }
             drawable
         } catch (e: Exception) {
             null
@@ -73,17 +94,35 @@ object AppIconCache {
                     val drawable = BitmapDrawable(context.resources, bitmap)
                     memoryCache[appInfo.packageName] = drawable
                     return drawable
+                } else {
+                    diskFile.delete()
                 }
             } catch (e: Exception) {
-                // Fallback
+                diskFile.delete()
             }
         }
 
         return try {
             val pm = context.packageManager
-            val drawable = pm.getApplicationIcon(appInfo)
-            memoryCache[appInfo.packageName] = drawable
-            saveIconToDiskAsync(context, appInfo.packageName, drawable)
+            val launchIntent = pm.getLaunchIntentForPackage(appInfo.packageName)
+            val launchComponent = launchIntent?.component
+
+            val drawable = (launchComponent?.let {
+                try { pm.getActivityIcon(it) } catch (e: Exception) { null }
+            }) ?: try {
+                appInfo.loadIcon(pm)
+            } catch (e: Exception) {
+                try {
+                    pm.getApplicationIcon(appInfo)
+                } catch (e2: Exception) {
+                    pm.getApplicationIcon(appInfo.packageName)
+                }
+            }
+
+            if (drawable != null) {
+                memoryCache[appInfo.packageName] = drawable
+                saveIconToDiskAsync(context, appInfo.packageName, drawable)
+            }
             drawable
         } catch (e: Exception) {
             null
@@ -106,9 +145,11 @@ object AppIconCache {
                     val bitmap = BitmapFactory.decodeFile(file.absolutePath)
                     if (bitmap != null) {
                         memoryCache[pkg] = BitmapDrawable(resources, bitmap)
+                    } else {
+                        file.delete()
                     }
                 } catch (e: Exception) {
-                    // Ignore corrupted cache entry
+                    file.delete()
                 }
             }
         }
@@ -125,30 +166,46 @@ object AppIconCache {
     private fun saveIconToDiskAsync(context: Context, packageName: String, drawable: Drawable) {
         ioScope.launch {
             try {
-                val file = getDiskCacheFile(context, packageName)
-                if (file.exists() && file.length() > 0) return@launch
+                val iconDir = File(context.filesDir, "app_icons")
+                if (!iconDir.exists()) iconDir.mkdirs()
+                val targetFile = File(iconDir, "$packageName.png")
+                if (targetFile.exists() && targetFile.length() > 0) return@launch
 
+                val tempFile = File(iconDir, "$packageName.png.tmp")
                 val bitmap = drawableToBitmap(drawable)
-                FileOutputStream(file).use { out ->
+                FileOutputStream(tempFile).use { out ->
                     bitmap.compress(Bitmap.CompressFormat.PNG, 95, out)
                     out.flush()
                 }
+                tempFile.renameTo(targetFile)
             } catch (e: Exception) {
                 // Ignore background caching failures
             }
         }
     }
 
-    private fun drawableToBitmap(drawable: Drawable): Bitmap {
-        if (drawable is BitmapDrawable && drawable.bitmap != null) {
-            return drawable.bitmap
+    fun drawableToBitmap(drawable: Drawable, targetSize: Int = 144): Bitmap {
+        val d = try {
+            drawable.constantState?.newDrawable()?.mutate() ?: drawable
+        } catch (e: Exception) {
+            drawable
         }
-        val width = if (drawable.intrinsicWidth > 0) drawable.intrinsicWidth.coerceAtMost(144) else 96
-        val height = if (drawable.intrinsicHeight > 0) drawable.intrinsicHeight.coerceAtMost(144) else 96
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+
+        if (d is BitmapDrawable && d.bitmap != null && !d.bitmap.isRecycled) {
+            try {
+                return d.bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: d.bitmap
+            } catch (e: Exception) {
+                // fall through to drawing on canvas
+            }
+        }
+
+        val w = if (d.intrinsicWidth > 0) d.intrinsicWidth else targetSize
+        val h = if (d.intrinsicHeight > 0) d.intrinsicHeight else targetSize
+        val size = maxOf(72, minOf(maxOf(w, h), 256))
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        drawable.setBounds(0, 0, canvas.width, canvas.height)
-        drawable.draw(canvas)
+        d.setBounds(0, 0, size, size)
+        d.draw(canvas)
         return bitmap
     }
 }

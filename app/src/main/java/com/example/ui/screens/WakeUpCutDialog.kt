@@ -144,7 +144,12 @@ fun WakeUpCutDialog(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    AppIconImage(drawable = app.icon, appName = app.appName, size = 46.dp)
+                    AppIconImage(
+                        drawable = app.icon,
+                        appName = app.appName,
+                        size = 46.dp,
+                        packageName = app.packageName
+                    )
                     Spacer(modifier = Modifier.width(14.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
