@@ -255,14 +255,20 @@ fun AddAppsDialog(
                     .padding(horizontal = 20.dp, vertical = 6.dp)
                     .focusRequester(searchFocusRequester)
                     .clickable {
-                        searchFocusRequester.requestFocus()
-                        keyboardController?.show()
+                        try {
+                            searchFocusRequester.requestFocus()
+                            keyboardController?.show()
+                        } catch (_: Exception) {
+                        }
                     },
                 placeholder = { Text("Search installed applications...") },
                 leadingIcon = {
                     IconButton(onClick = {
-                        searchFocusRequester.requestFocus()
-                        keyboardController?.show()
+                        try {
+                            searchFocusRequester.requestFocus()
+                            keyboardController?.show()
+                        } catch (_: Exception) {
+                        }
                     }) {
                         Icon(
                             imageVector = Icons.Default.Search,

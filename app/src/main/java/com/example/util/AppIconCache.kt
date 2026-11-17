@@ -17,9 +17,12 @@ import java.util.concurrent.ConcurrentHashMap
 
 object AppIconCache {
     private val memoryCache = ConcurrentHashMap<String, Drawable>()
+    private val bitmapCache = ConcurrentHashMap<String, Bitmap>()
     private val ioScope = CoroutineScope(Dispatchers.IO)
 
     fun get(packageName: String): Drawable? = memoryCache[packageName]
+
+    fun getBitmap(packageName: String): Bitmap? = bitmapCache[packageName]
 
     fun put(packageName: String, drawable: Drawable) {
         memoryCache[packageName] = drawable
@@ -40,6 +43,7 @@ object AppIconCache {
             try {
                 val bitmap = BitmapFactory.decodeFile(diskFile.absolutePath)
                 if (bitmap != null) {
+                    bitmapCache[packageName] = bitmap
                     val drawable = BitmapDrawable(context.resources, bitmap)
                     memoryCache[packageName] = drawable
                     return drawable
@@ -91,6 +95,7 @@ object AppIconCache {
             try {
                 val bitmap = BitmapFactory.decodeFile(diskFile.absolutePath)
                 if (bitmap != null) {
+                    bitmapCache[appInfo.packageName] = bitmap
                     val drawable = BitmapDrawable(context.resources, bitmap)
                     memoryCache[appInfo.packageName] = drawable
                     return drawable
@@ -144,6 +149,7 @@ object AppIconCache {
                 try {
                     val bitmap = BitmapFactory.decodeFile(file.absolutePath)
                     if (bitmap != null) {
+                        bitmapCache[pkg] = bitmap
                         memoryCache[pkg] = BitmapDrawable(resources, bitmap)
                     } else {
                         file.delete()
@@ -173,6 +179,7 @@ object AppIconCache {
 
                 val tempFile = File(iconDir, "$packageName.png.tmp")
                 val bitmap = drawableToBitmap(drawable)
+                bitmapCache[packageName] = bitmap
                 FileOutputStream(tempFile).use { out ->
                     bitmap.compress(Bitmap.CompressFormat.PNG, 95, out)
                     out.flush()

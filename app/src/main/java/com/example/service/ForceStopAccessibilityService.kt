@@ -65,9 +65,9 @@ class ForceStopAccessibilityService : AccessibilityService() {
             // Successfully clicked confirm dialog! Finish this app and navigate back
             stepTimeoutJob?.cancel()
             serviceScope.launch {
-                delay(200)
+                delay(100)
                 performGlobalAction(GLOBAL_ACTION_BACK)
-                delay(250)
+                delay(100)
                 finishCurrentTarget()
             }
             return
@@ -83,9 +83,9 @@ class ForceStopAccessibilityService : AccessibilityService() {
                 // Button is disabled, meaning the app is already force-stopped or not running!
                 stepTimeoutJob?.cancel()
                 serviceScope.launch {
-                    delay(150)
+                    delay(80)
                     performGlobalAction(GLOBAL_ACTION_BACK)
-                    delay(200)
+                    delay(80)
                     finishCurrentTarget()
                 }
             }
@@ -169,7 +169,7 @@ class ForceStopAccessibilityService : AccessibilityService() {
         // Set safety timeout in case window doesn't appear or button isn't found
         stepTimeoutJob?.cancel()
         stepTimeoutJob = serviceScope.launch {
-            delay(3500)
+            delay(2200)
             if (isAutomating && currentTargetPackage == packageName) {
                 performGlobalAction(GLOBAL_ACTION_BACK)
                 finishCurrentTarget()

@@ -27,7 +27,8 @@ data class NonRootProcessActivity(
     val lastEventType: Int = 0,
     val lastEventTimestamp: Long = 0L,
     val hasActiveForegroundService: Boolean = false,
-    val isInRecents: Boolean = false
+    val isInRecents: Boolean = false,
+    val isCurrentlyTop: Boolean = false
 )
 
 class AppStatusDetector(private val context: Context) {
@@ -97,35 +98,39 @@ class AppStatusDetector(private val context: Context) {
     }
 
     @Volatile
-    private var cachedAccessibilityPackages: Set<String> = emptySet()
+    private var cachedAccessibilityPackages: Set<String>? = null
     @Volatile
     private var lastAccessibilityCheck: Long = 0L
 
-    fun getEnabledAccessibilityPackages(): Set<String> {
+    fun getEnabledAccessibilityPackages(forceRefresh: Boolean = false): Set<String> {
         val now = System.currentTimeMillis()
-        if (now - lastAccessibilityCheck < 10_000L && cachedAccessibilityPackages.isNotEmpty()) {
-            return cachedAccessibilityPackages
+        val cached = cachedAccessibilityPackages
+        if (!forceRefresh && cached != null && now - lastAccessibilityCheck < 1_000L) {
+            return cached
         }
         val result = mutableSetOf<String>()
         try {
-            val enabledServices = android.provider.Settings.Secure.getString(
-                context.contentResolver,
-                android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-            )
-            if (!enabledServices.isNullOrBlank()) {
-                val colonSplitter = android.text.TextUtils.SimpleStringSplitter(':')
-                colonSplitter.setString(enabledServices)
-                while (colonSplitter.hasNext()) {
-                    val componentNameString = colonSplitter.next()
-                    val componentName = android.content.ComponentName.unflattenFromString(componentNameString)
-                    if (componentName != null) {
-                        result.add(componentName.packageName)
+            val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? android.view.accessibility.AccessibilityManager
+            val activeServices = am?.getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+            activeServices?.forEach {
+                it.resolveInfo?.serviceInfo?.packageName?.let { pkg -> result.add(pkg) }
+            }
+            if (activeServices == null) {
+                val enabledServices = android.provider.Settings.Secure.getString(
+                    context.contentResolver,
+                    android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+                )
+                if (!enabledServices.isNullOrBlank()) {
+                    val colonSplitter = android.text.TextUtils.SimpleStringSplitter(':')
+                    colonSplitter.setString(enabledServices)
+                    while (colonSplitter.hasNext()) {
+                        val componentNameString = colonSplitter.next()
+                        val componentName = android.content.ComponentName.unflattenFromString(componentNameString)
+                        if (componentName != null) {
+                            result.add(componentName.packageName)
+                        }
                     }
                 }
-            }
-            val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? android.view.accessibility.AccessibilityManager
-            am?.getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK)?.forEach {
-                result.add(it.resolveInfo.serviceInfo.packageName)
             }
         } catch (e: Exception) {
             // Ignore
@@ -160,12 +165,15 @@ class AppStatusDetector(private val context: Context) {
 
         try {
             val endTime = System.currentTimeMillis()
-            val startTime = endTime - (90 * 1000L) // Ultra-fast scan last 90 seconds instead of 5 minutes
+            val startTime = endTime - (30 * 60 * 1000L) // Scan 30 minutes so long-running FGS & recent tasks are captured
             val events = usageStatsManager.queryEvents(startTime, endTime)
             val event = UsageEvents.Event()
 
             val fgServiceStarts = mutableMapOf<String, Long>()
             val fgServiceStops = mutableMapOf<String, Long>()
+            val lastResumed = mutableMapOf<String, Long>()
+            val lastPausedOrStopped = mutableMapOf<String, Long>()
+            val lastDestroyed = mutableMapOf<String, Long>()
             val lastEvents = mutableMapOf<String, Pair<Int, Long>>()
 
             while (events.hasNextEvent()) {
@@ -176,28 +184,41 @@ class AppStatusDetector(private val context: Context) {
 
                 lastEvents[pkg] = Pair(type, time)
 
-                if (type == UsageEvents.Event.FOREGROUND_SERVICE_START) {
-                    fgServiceStarts[pkg] = time
-                } else if (type == UsageEvents.Event.FOREGROUND_SERVICE_STOP) {
-                    fgServiceStops[pkg] = time
+                when (type) {
+                    UsageEvents.Event.ACTIVITY_RESUMED -> lastResumed[pkg] = time
+                    UsageEvents.Event.ACTIVITY_PAUSED,
+                    UsageEvents.Event.ACTIVITY_STOPPED -> lastPausedOrStopped[pkg] = time
+                    UsageEvents.Event.FOREGROUND_SERVICE_START -> fgServiceStarts[pkg] = time
+                    UsageEvents.Event.FOREGROUND_SERVICE_STOP -> fgServiceStops[pkg] = time
+                    else -> {
+                        if (type == 24 /* ACTIVITY_DESTROYED */) {
+                            lastDestroyed[pkg] = time
+                        }
+                    }
                 }
             }
 
             val now = System.currentTimeMillis()
-            for ((pkg, eventPair) in lastEvents) {
+            val allPkgs = lastEvents.keys + fgServiceStarts.keys
+            for (pkg in allPkgs) {
+                val eventPair = lastEvents[pkg] ?: Pair(0, 0L)
                 val start = fgServiceStarts[pkg] ?: 0L
                 val stop = fgServiceStops[pkg] ?: 0L
                 val hasFgService = start > stop && (now - start < 12 * 60 * 60 * 1000L)
-                val isRecent = (now - eventPair.second < 2 * 60 * 1000L) &&
-                    (eventPair.first == UsageEvents.Event.ACTIVITY_RESUMED ||
-                     eventPair.first == UsageEvents.Event.ACTIVITY_PAUSED) &&
-                    (eventPair.first != UsageEvents.Event.ACTIVITY_STOPPED)
+
+                val resumedAt = lastResumed[pkg] ?: 0L
+                val pausedAt = lastPausedOrStopped[pkg] ?: 0L
+                val destroyedAt = lastDestroyed[pkg] ?: 0L
+
+                val isCurrentlyTop = resumedAt > pausedAt && (now - resumedAt < 60_000L)
+                val isRecent = resumedAt > 0L && resumedAt > destroyedAt && (now - resumedAt < 15 * 60 * 1000L)
 
                 map[pkg] = NonRootProcessActivity(
                     lastEventType = eventPair.first,
                     lastEventTimestamp = eventPair.second,
                     hasActiveForegroundService = hasFgService,
-                    isInRecents = isRecent
+                    isInRecents = isRecent,
+                    isCurrentlyTop = isCurrentlyTop
                 )
             }
         } catch (e: Exception) {
@@ -435,6 +456,123 @@ class AppStatusDetector(private val context: Context) {
             pkg.contains("podcast")
     }
 
+    fun classifyManagedAppState(
+        rootState: RootProcessState?,
+        runningProc: ActivityManager.RunningAppProcessInfo?,
+        nonRootActivity: NonRootProcessActivity?,
+        isRootMode: Boolean,
+        isOsFlagStopped: Boolean,
+        isManuallyStopped: Boolean,
+        isAccessibilityActive: Boolean,
+        isWorkingIgnored: Boolean,
+        isRestrictedForeground: Boolean,
+        recentForegroundBeforeScreenOff: Boolean = false
+    ): Triple<AppState, String, String> {
+        val isActuallyRunning = if (isRootMode && rootState != null) {
+            rootState.isRunning
+        } else if (isRootMode) {
+            runningProc != null
+        } else {
+            runningProc != null || (!isOsFlagStopped && (
+                nonRootActivity?.hasActiveForegroundService == true ||
+                nonRootActivity?.isCurrentlyTop == true
+            ))
+        }
+
+        val isActiveAccessibility = isAccessibilityActive && (!isOsFlagStopped || isActuallyRunning)
+
+        if ((isOsFlagStopped || isManuallyStopped) && !isActuallyRunning && !isActiveAccessibility) {
+            return Triple(AppState.BACKGROUND_FREE, "Hibernated", "")
+        }
+
+        if (isActiveAccessibility) {
+            return if (!isWorkingIgnored) {
+                Triple(AppState.WORKING_STATE, "Being used by Accessibility", "")
+            } else {
+                Triple(
+                    AppState.BACKGROUND_RUNNING,
+                    "Running in background",
+                    "Being used by Accessibility\nIgnored running state"
+                )
+            }
+        }
+
+        val isTop = (rootState?.isTop == true) ||
+            (nonRootActivity?.isCurrentlyTop == true) ||
+            (runningProc?.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND)
+
+        if (isTop) {
+            val sub = mutableListOf<String>()
+            if (isWorkingIgnored) sub.add("Ignored running state")
+            if (isRestrictedForeground) sub.add("Restricted running as foreground")
+            return Triple(AppState.FOREGROUND, "Foreground", sub.joinToString("\n"))
+        }
+
+        val isFgService = (rootState?.isForegroundService == true) ||
+            (!isOsFlagStopped && nonRootActivity?.hasActiveForegroundService == true) ||
+            (runningProc?.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE) ||
+            (runningProc?.importance == 125)
+
+        if (isFgService) {
+            return if (isRestrictedForeground) {
+                val sub = mutableListOf("Restricted running as foreground")
+                if (isWorkingIgnored) sub.add("Ignored running state")
+                Triple(AppState.BACKGROUND_RUNNING, "", sub.joinToString("\n"))
+            } else {
+                val sub = if (isWorkingIgnored) "Ignored running state" else ""
+                Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", sub)
+            }
+        }
+
+        val isInRecents = (rootState?.isInRecents == true) ||
+            (!isRootMode && !isOsFlagStopped && nonRootActivity?.isInRecents == true && isActuallyRunning)
+        val isMediaPlaying = rootState?.isMediaPlaying == true
+        val isPerceptible = (rootState?.isPerceptible == true) ||
+            (runningProc?.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_PERCEPTIBLE)
+
+        if (isActuallyRunning && (isInRecents || isMediaPlaying || isPerceptible || recentForegroundBeforeScreenOff)) {
+            return if (!isWorkingIgnored) {
+                val detail = when {
+                    isMediaPlaying -> "Playing media (protected)"
+                    isInRecents || recentForegroundBeforeScreenOff -> "In recent tasks (protected)"
+                    else -> "Working State"
+                }
+                val sub = if (isRestrictedForeground) "Restricted running as foreground" else ""
+                Triple(AppState.WORKING_STATE, detail, sub)
+            } else {
+                val sub = mutableListOf("In recent tasks", "Ignored running state")
+                if (isRestrictedForeground) sub.add("Restricted running as foreground")
+                Triple(AppState.BACKGROUND_RUNNING, "Running in background", sub.joinToString("\n"))
+            }
+        }
+
+        val hasActiveService = (rootState?.hasActiveService == true) ||
+            (runningProc != null &&
+                runningProc.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_SERVICE &&
+                runningProc.importance > ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE)
+
+        if (isActuallyRunning && !hasActiveService &&
+            (rootState?.isCached == true || (runningProc != null && runningProc.importance >= ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED))
+        ) {
+            val sub = mutableListOf<String>()
+            if (isWorkingIgnored) sub.add("Ignored running state")
+            if (isRestrictedForeground) sub.add("Restricted running as foreground")
+            return Triple(AppState.CACHED, "Cached in RAM", sub.joinToString("\n"))
+        }
+
+        if (isActuallyRunning || hasActiveService) {
+            val sub = mutableListOf<String>()
+            if (isWorkingIgnored) sub.add("Ignored running state")
+            if (isRestrictedForeground) sub.add("Restricted running as foreground")
+            return Triple(AppState.BACKGROUND_RUNNING, "Running in background", sub.joinToString("\n"))
+        }
+
+        val sub = mutableListOf<String>()
+        if (isWorkingIgnored) sub.add("Ignored running state")
+        if (isRestrictedForeground) sub.add("Restricted running as foreground")
+        return Triple(AppState.CACHED, "Pending Hibernation", sub.joinToString("\n"))
+    }
+
     private fun determineRootState(
         rootState: RootProcessState?,
         isIgnoredBattery: Boolean,
@@ -443,32 +581,18 @@ class AppStatusDetector(private val context: Context) {
         isFlagStopped: Boolean,
         packageName: String
     ): Triple<AppState, String, String> {
-        if (rootState == null || !rootState.isRunning) {
-            return if (isFlagStopped) {
-                Triple(AppState.BACKGROUND_FREE, "Hibernated", "")
-            } else {
-                Triple(AppState.CACHED, "Pending Hibernation", "Will hibernate after screen off")
-            }
-        }
-
-        if (rootState.isTop) {
-            return Triple(AppState.FOREGROUND, "Foreground", "Active on screen")
-        }
-
-        // 1. RUNNING AS FOREGROUND SERVICE (EVADING RESTRICTIONS)
-        if (rootState.isForegroundService) {
-            return Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
-        }
-
-        // 2. IN USER'S RECENTS -> Working State (Protected from screen-off auto-hibernation)
-        if (rootState.isInRecents) {
-            val secondary = if (isIgnoredBattery) "Restricted running as foreground" else "In recent tasks (protected)"
-            return Triple(AppState.WORKING_STATE, "Working State", secondary)
-        }
-
-        // 3. REGULAR BACKGROUND RUNNING PROCESS (e.g. MovieBox, AyuGram, Claude, MT Manager)
-        val secondary = if (isIgnoredBattery) "Restricted running as foreground" else ""
-        return Triple(AppState.BACKGROUND_RUNNING, "Running in background", secondary)
+        val isAccessibility = getEnabledAccessibilityPackages().contains(packageName)
+        return classifyManagedAppState(
+            rootState = rootState,
+            runningProc = null,
+            nonRootActivity = null,
+            isRootMode = true,
+            isOsFlagStopped = isFlagStopped,
+            isManuallyStopped = false,
+            isAccessibilityActive = isAccessibility,
+            isWorkingIgnored = false,
+            isRestrictedForeground = false
+        )
     }
 
     private fun determineNonRootState(
@@ -480,49 +604,18 @@ class AppStatusDetector(private val context: Context) {
         isFlagStopped: Boolean,
         packageName: String
     ): Triple<AppState, String, String> {
-        val now = System.currentTimeMillis()
-        val isRunning = proc != null || (nonRootActivity != null && now - nonRootActivity.lastEventTimestamp < 180_000)
-
-        if (!isRunning) {
-            return if (isFlagStopped) {
-                Triple(AppState.BACKGROUND_FREE, "Hibernated", "")
-            } else {
-                Triple(AppState.CACHED, "Pending Hibernation", "Will hibernate after screen off")
-            }
-        }
-
-        if (nonRootActivity != null) {
-            val elapsed = now - nonRootActivity.lastEventTimestamp
-            if (nonRootActivity.lastEventType == UsageEvents.Event.ACTIVITY_RESUMED && elapsed < 60_000) {
-                return Triple(AppState.FOREGROUND, "Foreground", "Active on screen")
-            }
-        }
-
-        if (proc != null) {
-            val importance = proc.importance
-            if (importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND) {
-                return Triple(AppState.FOREGROUND, "Foreground", "Active on screen")
-            }
-
-            if (nonRootActivity?.hasActiveForegroundService == true ||
-                importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE) {
-                return Triple(AppState.EVADING_RESTRICTIONS, "Running as foreground (evading restrictions)", "")
-            }
-
-            if (nonRootActivity?.isInRecents == true && (now - nonRootActivity.lastEventTimestamp < 15 * 60 * 1000L)) {
-                val secondary = if (isIgnoredBattery) "Restricted running as foreground" else "In recent tasks (protected)"
-                return Triple(AppState.WORKING_STATE, "Working State", secondary)
-            }
-
-            if (importance >= ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED) {
-                return Triple(AppState.CACHED, "Cached in RAM", "Will hibernate after screen off")
-            }
-
-            val recentHint = if (isIgnoredBattery) "Restricted running as foreground" else ""
-            return Triple(AppState.BACKGROUND_RUNNING, "Running in background", recentHint)
-        }
-
-        return Triple(AppState.BACKGROUND_RUNNING, "Running in background", "")
+        val isAccessibility = getEnabledAccessibilityPackages().contains(packageName)
+        return classifyManagedAppState(
+            rootState = null,
+            runningProc = proc,
+            nonRootActivity = nonRootActivity,
+            isRootMode = false,
+            isOsFlagStopped = isFlagStopped,
+            isManuallyStopped = false,
+            isAccessibilityActive = isAccessibility,
+            isWorkingIgnored = false,
+            isRestrictedForeground = false
+        )
     }
 
     private fun detectWakeUpPaths(

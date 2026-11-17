@@ -82,31 +82,64 @@ class ForceStopEngine(
 
         var completed = 0
         var failed = 0
+        val mode = preferences.mode
 
-        for (app in apps) {
-            _batchProgress.value = _batchProgress.value.copy(
-                currentPackage = app.packageName,
-                currentAppName = app.appName,
-                summary = "Freezing ${app.appName}..."
-            )
+        if (mode == OperatingMode.ROOT) {
+            for (chunk in apps.chunked(20)) {
+                val lastApp = chunk.last()
+                _batchProgress.value = _batchProgress.value.copy(
+                    currentPackage = lastApp.packageName,
+                    currentAppName = if (chunk.size > 1) "${chunk.first().appName} + ${chunk.size - 1} more" else lastApp.appName,
+                    summary = "Force stopping ${completed + chunk.size} of ${apps.size} apps..."
+                )
 
-            val success = stopSingleApp(app)
-            if (success) {
-                completed++
-            } else {
-                failed++
+                val chunkPkgs = chunk.map { it.packageName }
+                val res = RootExecutor.forceStopAppsBatch(chunkPkgs)
+                if (res.isSuccess) {
+                    database.appDao().recordFreezeBatch(chunkPkgs, System.currentTimeMillis())
+                    completed += chunk.size
+                } else {
+                    failed += chunk.size
+                }
+
+                _batchProgress.value = _batchProgress.value.copy(
+                    completedCount = completed,
+                    failedCount = failed
+                )
             }
+        } else {
+            val pm = context.packageManager
+            val useAccessibility = ForceStopAccessibilityService.isRunning()
+            for (app in apps) {
+                val isAlreadyStopped = try {
+                    val info = pm.getApplicationInfo(app.packageName, 0)
+                    (info.flags and android.content.pm.ApplicationInfo.FLAG_STOPPED) != 0
+                } catch (_: Exception) {
+                    false
+                }
+                if (isAlreadyStopped) {
+                    completed++
+                    _batchProgress.value = _batchProgress.value.copy(completedCount = completed)
+                    continue
+                }
 
-            _batchProgress.value = _batchProgress.value.copy(
-                completedCount = completed,
-                failedCount = failed
-            )
+                _batchProgress.value = _batchProgress.value.copy(
+                    currentPackage = app.packageName,
+                    currentAppName = app.appName,
+                    summary = "Freezing ${app.appName}..."
+                )
 
-            // Graceful interval between automated app freezes
-            if (preferences.mode == OperatingMode.NON_ROOT && ForceStopAccessibilityService.isRunning()) {
-                delay(300)
-            } else {
-                delay(50)
+                val success = stopSingleApp(app)
+                if (success) completed++ else failed++
+
+                _batchProgress.value = _batchProgress.value.copy(
+                    completedCount = completed,
+                    failedCount = failed
+                )
+
+                if (useAccessibility) {
+                    delay(60)
+                }
             }
         }
 

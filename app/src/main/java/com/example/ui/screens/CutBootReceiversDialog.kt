@@ -213,14 +213,20 @@ fun CutBootReceiversDialog(
                         .testTag("boot_search_input")
                         .focusRequester(searchFocusRequester)
                         .clickable {
-                            searchFocusRequester.requestFocus()
-                            keyboardController?.show()
+                            try {
+                                searchFocusRequester.requestFocus()
+                                keyboardController?.show()
+                            } catch (_: Exception) {
+                            }
                         },
                     placeholder = { Text("Search apps with boot receivers...") },
                     leadingIcon = {
                         IconButton(onClick = {
-                            searchFocusRequester.requestFocus()
-                            keyboardController?.show()
+                            try {
+                                searchFocusRequester.requestFocus()
+                                keyboardController?.show()
+                            } catch (_: Exception) {
+                            }
                         }) {
                             Icon(Icons.Default.Search, contentDescription = "Search")
                         }

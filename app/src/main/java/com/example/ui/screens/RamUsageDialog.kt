@@ -302,14 +302,20 @@ fun RamUsageBottomSheet(
                     .height(50.dp)
                     .focusRequester(searchFocusRequester)
                     .clickable {
-                        searchFocusRequester.requestFocus()
-                        keyboardController?.show()
+                        try {
+                            searchFocusRequester.requestFocus()
+                            keyboardController?.show()
+                        } catch (_: Exception) {
+                        }
                     },
                 placeholder = { Text("Filter running apps...", fontSize = 13.sp) },
                 leadingIcon = {
                     IconButton(onClick = {
-                        searchFocusRequester.requestFocus()
-                        keyboardController?.show()
+                        try {
+                            searchFocusRequester.requestFocus()
+                            keyboardController?.show()
+                        } catch (_: Exception) {
+                        }
                     }) {
                         Icon(
                             imageVector = Icons.Default.Search,

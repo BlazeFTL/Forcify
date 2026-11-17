@@ -38,32 +38,35 @@ fun AppIconImage(
     modifier: Modifier = Modifier
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    var asyncDrawable by remember(drawable, packageName) {
-        androidx.compose.runtime.mutableStateOf(drawable)
+    var asyncBitmap by remember(drawable, packageName) {
+        val preCachedBitmap = packageName?.let { com.example.util.AppIconCache.getBitmap(it) }
+        mutableStateOf(
+            preCachedBitmap ?: if (drawable is android.graphics.drawable.BitmapDrawable && drawable.bitmap != null && !drawable.bitmap.isRecycled) {
+                drawable.bitmap
+            } else {
+                null
+            }
+        )
     }
 
     androidx.compose.runtime.LaunchedEffect(drawable, packageName) {
-        if (asyncDrawable == null && !packageName.isNullOrBlank()) {
+        if (asyncBitmap == null) {
             kotlinx.coroutines.withContext(Dispatchers.IO) {
-                val loaded = com.example.util.AppIconCache.getOrLoad(context, packageName)
-                if (loaded != null) {
-                    asyncDrawable = loaded
+                val activeDrawable = drawable ?: packageName?.let { com.example.util.AppIconCache.getOrLoad(context, it) }
+                val bmp = if (packageName != null) {
+                    com.example.util.AppIconCache.getBitmap(packageName)
+                        ?: activeDrawable?.let { com.example.util.AppIconCache.drawableToBitmap(it) }
+                } else {
+                    activeDrawable?.let { com.example.util.AppIconCache.drawableToBitmap(it) }
+                }
+                if (bmp != null) {
+                    asyncBitmap = bmp
                 }
             }
         }
     }
 
-    val activeDrawable = asyncDrawable ?: drawable
-
-    val bitmap = remember(activeDrawable) {
-        activeDrawable?.let { d ->
-            try {
-                com.example.util.AppIconCache.drawableToBitmap(d)
-            } catch (e: Exception) {
-                null
-            }
-        }
-    }
+    val bitmap = asyncBitmap
 
     if (bitmap != null) {
         Image(

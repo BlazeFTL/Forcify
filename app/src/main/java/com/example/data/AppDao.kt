@@ -30,6 +30,9 @@ interface AppDao {
     @Query("UPDATE hibernated_apps SET lastFrozenTimestamp = :timestamp, freezeCount = freezeCount + 1 WHERE packageName = :packageName")
     suspend fun recordFreeze(packageName: String, timestamp: Long)
 
+    @Query("UPDATE hibernated_apps SET lastFrozenTimestamp = :timestamp, freezeCount = freezeCount + 1 WHERE packageName IN (:packageNames)")
+    suspend fun recordFreezeBatch(packageNames: List<String>, timestamp: Long)
+
     @Query("UPDATE hibernated_apps SET cutWakeups = :cut WHERE packageName = :packageName")
     suspend fun setCutWakeups(packageName: String, cut: Boolean)
 }
