@@ -1,60 +1,65 @@
 package com.example.service
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.pm.ApplicationInfo
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import com.example.MainActivity
+import com.example.R
 import com.example.data.OperatingMode
 import com.example.data.PureStopPreferences
+import com.example.detector.AppStateClassifier
 import com.example.detector.AppStatusDetector
 import com.example.engine.RootExecutor
-import com.example.model.AppState
 import com.example.util.AppIconCache
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Lightweight background service matching Greenify's background service architecture.
+ * Lightweight always-on service (Greenify style).
  *
- * Benefits:
- * 1. Keeps process & icon/state caches warm so reopening after swiping from Recents is instant.
- * 2. Listens for ACTION_PACKAGE_RESTARTED so manual force-stops in Android Settings reflect immediately.
- * 3. Protects active/recent/accessibility/media/foreground-service apps cleanly on screen off.
- * 4. Shares the exact same state classification rules as the dashboard UI.
+ * - Runs as a low priority foreground service, so it survives removal from recents
+ *   and the process stays warm: reopening the app shows fresh states instantly.
+ * - Listens for package broadcasts (force stop, install, remove) and tells the UI at once.
+ * - Persists classified states with the same classifier the UI uses.
+ * - On screen off, hibernates managed apps but never touches apps that are on screen,
+ *   in recents, running a foreground service or used by accessibility.
  */
 class ForCifyDaemonService : Service() {
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private lateinit var preferences: PureStopPreferences
-    private lateinit var detector: AppStatusDetector
+    private val detector by lazy { AppStatusDetector(applicationContext) }
+
     private var screenReceiver: BroadcastReceiver? = null
     private var packageReceiver: BroadcastReceiver? = null
     private var hibernateJob: Job? = null
     private var stateSyncJob: Job? = null
 
-    private val lastForegroundSeenAt = ConcurrentHashMap<String, Long>()
-
     override fun onCreate() {
         super.onCreate()
         preferences = PureStopPreferences(applicationContext)
-        detector = AppStatusDetector(applicationContext)
+        promoteToForeground()
 
-        // Preload icons for all managed apps from disk cache immediately
         val savedPkgs = preferences.savedManagedPackages
         if (savedPkgs.isNotEmpty()) {
             AppIconCache.preloadFromDisk(applicationContext, savedPkgs)
@@ -62,121 +67,157 @@ class ForCifyDaemonService : Service() {
 
         registerScreenReceiver()
         registerPackageReceiver()
+        hardenSelf()
 
-        // Start background wake-up detection engine
         com.example.detector.BackgroundWakeUpDetector.startMonitoring(
             context = applicationContext,
             scope = serviceScope,
             preferences = preferences
         )
 
-        // Continuous lightweight background state sync
         startBackgroundStateSync()
     }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        promoteToForeground()
+        val savedPkgs = preferences.savedManagedPackages
+        if (savedPkgs.isNotEmpty()) {
+            AppIconCache.preloadFromDisk(applicationContext, savedPkgs)
+        }
+        startBackgroundStateSync()
+        return START_STICKY
+    }
+
+    private fun promoteToForeground() {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    CHANNEL_ID,
+                    "Background monitor",
+                    NotificationManager.IMPORTANCE_MIN
+                ).apply {
+                    setShowBadge(false)
+                    description = "Keeps app state detection live"
+                }
+                nm?.createNotificationChannel(channel)
+            }
+            val openIntent = Intent(this, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            }
+            val pi = PendingIntent.getActivity(
+                this, 0, openIntent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_stat_forcify)
+                .setContentTitle("ForCify")
+                .setContentText("Monitoring app states")
+                .setContentIntent(pi)
+                .setOngoing(true)
+                .setShowWhen(false)
+                .setPriority(NotificationCompat.PRIORITY_MIN)
+                .setCategory(NotificationCompat.CATEGORY_SERVICE)
+                .build()
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            // Not allowed to promote right now; service keeps running as a plain service
+        }
+    }
+
+    /** Root mode only: keep our own process out of battery restrictions so the daemon is not killed. */
+    private fun hardenSelf() {
+        if (preferences.mode != OperatingMode.ROOT) return
+        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+        if (pm?.isIgnoringBatteryOptimizations(packageName) == true) return
+        serviceScope.launch {
+            RootExecutor.executeCommand(
+                "dumpsys deviceidle whitelist +$packageName >/dev/null 2>&1; " +
+                    "cmd appops set $packageName RUN_ANY_IN_BACKGROUND allow >/dev/null 2>&1"
+            )
+        }
+    }
+
+    // ---------------------------------------------------------------- state sync
 
     private fun startBackgroundStateSync() {
         if (stateSyncJob?.isActive == true) return
         stateSyncJob = serviceScope.launch {
             while (isActive) {
                 try {
-                    val pmPower = applicationContext.getSystemService(Context.POWER_SERVICE) as? PowerManager
-                    val isInteractive = pmPower?.isInteractive ?: true
-                    if (isInteractive) {
-                        syncManagedStatesNow()
-                        delay(2500L)
-                    } else {
-                        delay(6000L)
+                    if (!AppStateHub.screenOn.value) {
+                        // Nothing changes for the user while screen is off. Sleep until it wakes.
+                        AppStateHub.screenOn.first { it }
+                        continue
                     }
+                    // While UI is visible it refreshes states itself and persists them.
+                    if (!AppStateHub.uiVisible) {
+                        syncStatesOnce(maxDeepAgeMs = 60_000L)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
-                    delay(4000L)
+                    // Ignore transient errors
                 }
+                delay(if (AppStateHub.uiVisible) 3_000L else 10_000L)
             }
         }
     }
 
-    private suspend fun syncManagedStatesNow() {
-        val managedPkgs = preferences.savedManagedPackages
-        if (managedPkgs.isEmpty()) return
-
-        val now = System.currentTimeMillis()
-        val isRoot = preferences.mode == OperatingMode.ROOT
+    private suspend fun computeStates(
+        packages: Set<String>,
+        maxDeepAgeMs: Long
+    ): Map<String, AppStateClassifier.Result> {
         val pm = applicationContext.packageManager
-        val installedAppsMap = try {
+        val installed = try {
             pm.getInstalledApplications(0).associateBy { it.packageName }
         } catch (e: Exception) {
             emptyMap()
         }
-
-        val rootProcessMap = if (isRoot) RootExecutor.queryRootProcessStates(managedPkgs) else emptyMap()
-        val runningProcs = detector.getRunningProcessesMap()
-        val nonRootActivityMap = if (!isRoot) detector.getNonRootActivityMap() else emptyMap()
+        val isRoot = preferences.mode == OperatingMode.ROOT
+        val rootMap = if (isRoot) RootExecutor.queryRootProcessStates(packages, maxDeepAgeMs) else emptyMap()
+        val authoritative = isRoot && RootExecutor.lastQueryOk
+        val nonRootMap = if (!authoritative) detector.getNonRootActivityMap() else emptyMap()
+        val runningMap = detector.getRunningProcessesMap()
         val accessibilityPkgs = detector.getEnabledAccessibilityPackages()
 
-        val statesToSave = mutableMapOf<String, Triple<AppState, String, String>>()
-        val pendingSet = mutableSetOf<String>()
-
-        for (pkg in managedPkgs) {
-            val appInfo = installedAppsMap[pkg]
-            val isOsFlagStopped = if (appInfo != null) {
-                (appInfo.flags and ApplicationInfo.FLAG_STOPPED) != 0
-            } else false
-
-            val rootState = rootProcessMap[pkg]
-            val runningProc = runningProcs[pkg]
-            val nonRootActivity = nonRootActivityMap[pkg]
-
-            val isTopNow = (rootState?.isTop == true) ||
-                (nonRootActivity?.isCurrentlyTop == true) ||
-                (runningProc?.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND)
-            if (isTopNow) {
-                lastForegroundSeenAt[pkg] = now
-            }
-
-            val recentFgAt = lastForegroundSeenAt[pkg] ?: 0L
-            val wasRecentlyForeground = recentFgAt > 0L && (now - recentFgAt < RECENT_FOREGROUND_PROTECTION_MS)
-
-            val classified = detector.classifyManagedAppState(
-                rootState = rootState,
-                runningProc = runningProc,
-                nonRootActivity = nonRootActivity,
-                isRootMode = isRoot,
-                isOsFlagStopped = isOsFlagStopped,
-                isManuallyStopped = false,
-                isAccessibilityActive = accessibilityPkgs.contains(pkg),
-                isWorkingIgnored = preferences.isWorkingStateIgnored(pkg),
-                isRestrictedForeground = preferences.isRestrictRunningAsForeground(pkg),
-                recentForegroundBeforeScreenOff = wasRecentlyForeground
+        val out = HashMap<String, AppStateClassifier.Result>()
+        for (pkg in packages) {
+            val info = installed[pkg]
+            out[pkg] = AppStateClassifier.classify(
+                AppStateClassifier.Input(
+                    rootAuthoritative = authoritative,
+                    rootState = rootMap[pkg],
+                    runningProc = runningMap[pkg],
+                    nonRoot = nonRootMap[pkg],
+                    isOsFlagStopped = info != null && (info.flags and android.content.pm.ApplicationInfo.FLAG_STOPPED) != 0,
+                    isAccessibilityActive = accessibilityPkgs.contains(pkg),
+                    isWorkingIgnored = preferences.isWorkingStateIgnored(pkg),
+                    isRestrictedForeground = preferences.isRestrictRunningAsForeground(pkg),
+                    manuallyStoppedRecently = false
+                )
             )
-
-            statesToSave[pkg] = classified
-            if (classified.first != AppState.BACKGROUND_FREE) {
-                pendingSet.add(pkg)
-            }
         }
-
-        preferences.batchSaveAppStates(statesToSave)
-        preferences.savedPendingPackages = pendingSet
-        _stateSyncedFlow.tryEmit(now)
+        return out
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val savedPkgs = preferences.savedManagedPackages
-        if (savedPkgs.isNotEmpty()) {
-            AppIconCache.preloadFromDisk(applicationContext, savedPkgs)
-        }
-        serviceScope.launch {
-            try {
-                syncManagedStatesNow()
-            } catch (_: Exception) {
-            }
-        }
-        return START_STICKY
+    private suspend fun syncStatesOnce(maxDeepAgeMs: Long) {
+        val managed = preferences.savedManagedPackages
+        if (managed.isEmpty()) return
+        val states = computeStates(managed, maxDeepAgeMs)
+        preferences.batchSaveAppStates(states.mapValues { Triple(it.value.state, it.value.detail, it.value.secondary) })
+        preferences.savedPendingPackages = states.filterValues { !it.isStopped }.keys
     }
+
+    // ---------------------------------------------------------------- receivers
 
     private fun registerScreenReceiver() {
         if (screenReceiver != null) return
-
-        screenReceiver = object : BroadcastReceiver() {
+        val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 when (intent?.action) {
                     Intent.ACTION_SCREEN_OFF -> onScreenOff()
@@ -184,160 +225,88 @@ class ForCifyDaemonService : Service() {
                 }
             }
         }
-
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_USER_PRESENT)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(screenReceiver, filter, RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(screenReceiver, filter)
-        }
+        ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        screenReceiver = receiver
     }
 
     private fun registerPackageReceiver() {
         if (packageReceiver != null) return
-
-        packageReceiver = object : BroadcastReceiver() {
+        val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                if (intent?.action == Intent.ACTION_PACKAGE_RESTARTED) {
-                    val pkg = intent.data?.schemeSpecificPart ?: return
-                    lastForegroundSeenAt.remove(pkg)
-                    if (preferences.savedManagedPackages.contains(pkg)) {
-                        preferences.setSavedAppState(pkg, AppState.BACKGROUND_FREE, "Hibernated", "")
-                        val pending = preferences.savedPendingPackages.toMutableSet()
-                        if (pending.remove(pkg)) {
-                            preferences.savedPendingPackages = pending
-                        }
-                    }
-                    _packageRestartedFlow.tryEmit(pkg)
-                }
+                val pkg = intent?.data?.schemeSpecificPart ?: return
+                // ACTION_PACKAGE_RESTARTED is sent whenever a package is force stopped (here, Settings or anywhere else)
+                RootExecutor.invalidateCache()
+                AppStateHub.emitPackage(pkg)
             }
         }
-
-        val filter = IntentFilter(Intent.ACTION_PACKAGE_RESTARTED).apply {
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_PACKAGE_RESTARTED)
+            addAction(Intent.ACTION_PACKAGE_ADDED)
+            addAction(Intent.ACTION_PACKAGE_REMOVED)
+            addAction(Intent.ACTION_PACKAGE_REPLACED)
             addDataScheme("package")
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(packageReceiver, filter, RECEIVER_EXPORTED)
-        } else {
-            registerReceiver(packageReceiver, filter)
-        }
+        ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        packageReceiver = receiver
     }
 
     private fun onScreenOff() {
+        AppStateHub.setScreenOn(false)
         if (!preferences.autoHibernateAfterScreenOff) return
 
         hibernateJob?.cancel()
         hibernateJob = serviceScope.launch {
-            delay(5000L)
+            // What was on screen right before the lock. Protected like recents.
+            val topBefore: Set<String> =
+                if (SystemClock.elapsedRealtime() - RootExecutor.lastKnownTopAt < 60_000L) RootExecutor.lastKnownTop else emptySet()
 
-            val pmPower = applicationContext.getSystemService(Context.POWER_SERVICE) as? PowerManager
-            if (pmPower?.isInteractive == true) return@launch
+            delay(HIBERNATE_DELAY_MS)
 
-            val managedPkgs = preferences.savedManagedPackages
-            val pendingPkgs = preferences.savedPendingPackages
-            val targetPkgs = if (pendingPkgs.isNotEmpty()) pendingPkgs else managedPkgs
-            if (targetPkgs.isEmpty()) return@launch
+            if (preferences.mode != OperatingMode.ROOT) return@launch
+            val managed = preferences.savedManagedPackages
+            if (managed.isEmpty()) return@launch
 
-            val isRoot = preferences.mode == OperatingMode.ROOT
-            if (!isRoot) return@launch
+            RootExecutor.invalidateCache()
+            val states = computeStates(managed, maxDeepAgeMs = 0L)
+            // Never act blindly: if the root snapshot failed we cannot know what is protected.
+            if (!RootExecutor.lastQueryOk) return@launch
 
-            val now = System.currentTimeMillis()
-            val pm = applicationContext.packageManager
-            val installedAppsMap = try {
-                pm.getInstalledApplications(0).associateBy { it.packageName }
+            val targets = managed.filter { pkg ->
+                val st = states[pkg] ?: return@filter false
+                if (st.isStopped) return@filter false
+                val ignoreWorking = preferences.isWorkingStateIgnored(pkg)
+                val wasOnScreen = !ignoreWorking && topBefore.contains(pkg)
+                !st.isProtected(ignoreWorking) && !wasOnScreen
+            }
+            if (targets.isEmpty()) return@launch
+            if (AppStateHub.screenOn.value) return@launch
+
+            RootExecutor.forceStopPackages(targets)
+            try {
+                syncStatesOnce(maxDeepAgeMs = 0L)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                emptyMap()
+                // Ignore
             }
-            val topMap = RootExecutor.queryRootProcessStates(targetPkgs)
-            val nonRootActivityMap = detector.getNonRootActivityMap()
-            val accessibilityPkgs = detector.getEnabledAccessibilityPackages(forceRefresh = true)
-
-            val toStop = mutableListOf<String>()
-            val stoppedStates = mutableMapOf<String, Triple<AppState, String, String>>()
-            val remainingPending = mutableSetOf<String>()
-
-            for (pkg in targetPkgs) {
-                val appInfo = installedAppsMap[pkg]
-                val isOsFlagStopped = appInfo != null && (appInfo.flags and ApplicationInfo.FLAG_STOPPED) != 0
-                val state = topMap[pkg]
-                if (isOsFlagStopped && state?.isRunning != true) {
-                    stoppedStates[pkg] = Triple(AppState.BACKGROUND_FREE, "Hibernated", "")
-                    continue
-                }
-
-                val isWorkingIgnored = preferences.isWorkingStateIgnored(pkg)
-                val isRestrictedFg = preferences.isRestrictRunningAsForeground(pkg)
-
-                // Always skip foreground service if not restricted (matches Greenify EVADING_RESTRICTIONS)
-                if (state?.isForegroundService == true && !isRestrictedFg) {
-                    remainingPending.add(pkg)
-                    continue
-                }
-
-                if (!isWorkingIgnored) {
-                    val isAccessibility = accessibilityPkgs.contains(pkg)
-                    val recentFgAt = lastForegroundSeenAt[pkg] ?: 0L
-                    val wasRecentlyForeground = (recentFgAt > 0L && (now - recentFgAt < RECENT_FOREGROUND_PROTECTION_MS)) ||
-                        (nonRootActivityMap[pkg]?.isCurrentlyTop == true) ||
-                        (nonRootActivityMap[pkg]?.isInRecents == true && state?.isRunning == true)
-
-                    val isProtected = state?.isTop == true ||
-                        state?.isInRecents == true ||
-                        state?.isMediaPlaying == true ||
-                        state?.isPerceptible == true ||
-                        isAccessibility ||
-                        wasRecentlyForeground
-
-                    if (isProtected) {
-                        remainingPending.add(pkg)
-                        continue
-                    }
-                }
-
-                toStop.add(pkg)
-                stoppedStates[pkg] = Triple(AppState.BACKGROUND_FREE, "Hibernated", "")
-            }
-
-            if (toStop.isNotEmpty()) {
-                RootExecutor.forceStopAppsBatch(toStop)
-            }
-            if (stoppedStates.isNotEmpty()) {
-                preferences.batchSaveAppStates(stoppedStates)
-            }
-            preferences.savedPendingPackages = remainingPending
-            _stateSyncedFlow.tryEmit(System.currentTimeMillis())
         }
     }
 
     private fun onScreenOn() {
+        AppStateHub.setScreenOn(true)
         hibernateJob?.cancel()
-        serviceScope.launch {
-            try {
-                syncManagedStatesNow()
-            } catch (_: Exception) {
-            }
-        }
     }
 
     override fun onDestroy() {
-        screenReceiver?.let {
-            try {
-                unregisterReceiver(it)
-            } catch (_: Exception) {
-            }
-            screenReceiver = null
-        }
-        packageReceiver?.let {
-            try {
-                unregisterReceiver(it)
-            } catch (_: Exception) {
-            }
-            packageReceiver = null
-        }
+        screenReceiver?.let { try { unregisterReceiver(it) } catch (e: Exception) { } }
+        packageReceiver?.let { try { unregisterReceiver(it) } catch (e: Exception) { } }
+        screenReceiver = null
+        packageReceiver = null
         com.example.detector.BackgroundWakeUpDetector.stopMonitoring(applicationContext)
         serviceScope.cancel()
         super.onDestroy()
@@ -346,20 +315,24 @@ class ForCifyDaemonService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
-        private const val RECENT_FOREGROUND_PROTECTION_MS = 2 * 60 * 1000L
-
-        private val _packageRestartedFlow = MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 64)
-        val packageRestartedFlow: SharedFlow<String> = _packageRestartedFlow.asSharedFlow()
-
-        private val _stateSyncedFlow = MutableSharedFlow<Long>(replay = 1, extraBufferCapacity = 4)
-        val stateSyncedFlow: SharedFlow<Long> = _stateSyncedFlow.asSharedFlow()
+        private const val CHANNEL_ID = "forcify_monitor"
+        private const val NOTIFICATION_ID = 7001
+        private const val HIBERNATE_DELAY_MS = 10_000L
 
         fun start(context: Context) {
+            val intent = Intent(context, ForCifyDaemonService::class.java)
             try {
-                val intent = Intent(context, ForCifyDaemonService::class.java)
-                context.startService(intent)
-            } catch (_: Exception) {
-                // Restricted in background; will start on next foreground entry
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                try {
+                    context.startService(intent)
+                } catch (e2: Exception) {
+                    // Restricted: will start when UI is in foreground
+                }
             }
         }
     }

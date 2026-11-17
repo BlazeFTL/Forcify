@@ -82,64 +82,59 @@ class ForceStopEngine(
 
         var completed = 0
         var failed = 0
-        val mode = preferences.mode
 
-        if (mode == OperatingMode.ROOT) {
-            for (chunk in apps.chunked(20)) {
-                val lastApp = chunk.last()
+        if (preferences.mode == OperatingMode.ROOT) {
+            val byPkg = apps.associateBy { it.packageName }
+            val result = RootExecutor.forceStopPackages(apps.map { it.packageName }) { done ->
                 _batchProgress.value = _batchProgress.value.copy(
-                    currentPackage = lastApp.packageName,
-                    currentAppName = if (chunk.size > 1) "${chunk.first().appName} + ${chunk.size - 1} more" else lastApp.appName,
-                    summary = "Force stopping ${completed + chunk.size} of ${apps.size} apps..."
-                )
-
-                val chunkPkgs = chunk.map { it.packageName }
-                val res = RootExecutor.forceStopAppsBatch(chunkPkgs)
-                if (res.isSuccess) {
-                    database.appDao().recordFreezeBatch(chunkPkgs, System.currentTimeMillis())
-                    completed += chunk.size
-                } else {
-                    failed += chunk.size
-                }
-
-                _batchProgress.value = _batchProgress.value.copy(
-                    completedCount = completed,
-                    failedCount = failed
+                    completedCount = done.coerceAtMost(apps.size),
+                    summary = "Freezing $done of ${apps.size} apps..."
                 )
             }
-        } else {
-            val pm = context.packageManager
-            val useAccessibility = ForceStopAccessibilityService.isRunning()
-            for (app in apps) {
-                val isAlreadyStopped = try {
-                    val info = pm.getApplicationInfo(app.packageName, 0)
-                    (info.flags and android.content.pm.ApplicationInfo.FLAG_STOPPED) != 0
-                } catch (_: Exception) {
-                    false
+            val now = System.currentTimeMillis()
+            if (result.isSuccess) {
+                completed = apps.size
+                byPkg.keys.chunked(500).forEach { database.appDao().recordFreezeBatch(it, now) }
+            } else {
+                // Shell issue: fall back to one by one so failures are counted accurately
+                for (app in apps) {
+                    if (stopSingleApp(app)) completed++ else failed++
                 }
-                if (isAlreadyStopped) {
-                    completed++
-                    _batchProgress.value = _batchProgress.value.copy(completedCount = completed)
-                    continue
-                }
+            }
+            _batchProgress.value = _batchProgress.value.copy(
+                isRunning = false,
+                completedCount = completed,
+                failedCount = failed,
+                summary = "Completed! Successfully froze $completed of ${apps.size} apps."
+            )
+            onDone()
+            return@withContext
+        }
 
-                _batchProgress.value = _batchProgress.value.copy(
-                    currentPackage = app.packageName,
-                    currentAppName = app.appName,
-                    summary = "Freezing ${app.appName}..."
-                )
+        for (app in apps) {
+            _batchProgress.value = _batchProgress.value.copy(
+                currentPackage = app.packageName,
+                currentAppName = app.appName,
+                summary = "Freezing ${app.appName}..."
+            )
 
-                val success = stopSingleApp(app)
-                if (success) completed++ else failed++
+            val success = stopSingleApp(app)
+            if (success) {
+                completed++
+            } else {
+                failed++
+            }
 
-                _batchProgress.value = _batchProgress.value.copy(
-                    completedCount = completed,
-                    failedCount = failed
-                )
+            _batchProgress.value = _batchProgress.value.copy(
+                completedCount = completed,
+                failedCount = failed
+            )
 
-                if (useAccessibility) {
-                    delay(60)
-                }
+            // Graceful interval between automated app freezes
+            if (preferences.mode == OperatingMode.NON_ROOT && ForceStopAccessibilityService.isRunning()) {
+                delay(300)
+            } else {
+                delay(50)
             }
         }
 

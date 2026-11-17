@@ -155,14 +155,21 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
     val searchFocusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
 
+    // requestFocus throws when the field is not attached yet (it sits inside AnimatedVisibility).
+    // Calling it straight from the click handler was the search crash.
+    fun focusSearchSafely() {
+        try {
+            searchFocusRequester.requestFocus()
+            keyboardController?.show()
+        } catch (e: Exception) {
+            // Field not attached yet
+        }
+    }
+
     LaunchedEffect(isSearchExpanded) {
         if (isSearchExpanded) {
             kotlinx.coroutines.delay(120)
-            try {
-                searchFocusRequester.requestFocus()
-                keyboardController?.show()
-            } catch (_: Exception) {
-            }
+            focusSearchSafely()
         }
     }
 
@@ -172,12 +179,6 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
 
     BackHandler(enabled = isMultiSelectMode) {
         selectedPackagesForBatchStop = emptySet()
-    }
-
-    BackHandler(enabled = isSearchExpanded && !isMultiSelectMode) {
-        isSearchExpanded = false
-        viewModel.setSearchQuery("")
-        keyboardController?.hide()
     }
 
     LaunchedEffect(statusMessage) {
@@ -341,12 +342,11 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                         }
                     },
                     actions = {
-                        // Search toggle button: LaunchedEffect safely requests focus after AnimatedVisibility composes field
+                        // Search toggle button: Clicking Search Anywhere opens keyboard!
                         IconButton(
                             onClick = {
-                                val expand = !isSearchExpanded
-                                isSearchExpanded = expand
-                                if (!expand) {
+                                isSearchExpanded = !isSearchExpanded
+                                if (!isSearchExpanded) {
                                     viewModel.setSearchQuery("")
                                     keyboardController?.hide()
                                 }
@@ -627,66 +627,38 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
             }
         },
         floatingActionButton = {
-            if (!isMultiSelectMode) {
-                if (allManagedApps.isEmpty() && viewModel.preferences.savedManagedPackages.isEmpty()) {
-                    ExtendedFloatingActionButton(
-                        onClick = { viewModel.openAddApps() },
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = Color.White,
-                        elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier
-                            .testTag("add_apps_fab_button")
-                            .navigationBarsPadding()
-                            .padding(bottom = 12.dp, end = 8.dp),
-                        icon = {
-                            Icon(
-                                imageVector = Icons.Default.Add,
-                                contentDescription = "Add Apps to Force Stop",
-                                modifier = Modifier.size(22.dp)
-                            )
-                        },
-                        text = {
-                            Text(
-                                text = "Add Apps",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp
-                            )
+            if (!isMultiSelectMode && allManagedApps.isNotEmpty()) {
+                val hasStoppable = stoppableCount > 0
+                ExtendedFloatingActionButton(
+                    onClick = { viewModel.forceStopAllRunning() },
+                    containerColor = if (hasStoppable) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = if (hasStoppable) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                    elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .testTag("force_stop_fab_button")
+                        .navigationBarsPadding()
+                        .padding(bottom = 12.dp, end = 8.dp),
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Default.PowerSettingsNew,
+                            contentDescription = "Force Stop Button",
+                            modifier = Modifier.size(22.dp)
+                        )
+                    },
+                    text = {
+                        val fabLabel = when {
+                            stoppableCount > 0 -> "Force Stop ($stoppableCount)"
+                            protectedWorkingCount > 0 -> "Working Protected ($protectedWorkingCount)"
+                            else -> "All Hibernated ✓"
                         }
-                    )
-                } else {
-                    val hasStoppable = stoppableCount > 0
-                    ExtendedFloatingActionButton(
-                        onClick = { viewModel.forceStopAllRunning() },
-                        containerColor = if (hasStoppable) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                        contentColor = if (hasStoppable) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-                        elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier
-                            .testTag("force_stop_fab_button")
-                            .navigationBarsPadding()
-                            .padding(bottom = 12.dp, end = 8.dp),
-                        icon = {
-                            Icon(
-                                imageVector = Icons.Default.PowerSettingsNew,
-                                contentDescription = "Force Stop Button",
-                                modifier = Modifier.size(22.dp)
-                            )
-                        },
-                        text = {
-                            val fabLabel = when {
-                                stoppableCount > 0 -> "Force Stop ($stoppableCount)"
-                                protectedWorkingCount > 0 -> "Working Protected ($protectedWorkingCount)"
-                                else -> "All Hibernated ✓"
-                            }
-                            Text(
-                                text = fabLabel,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp
-                            )
-                        }
-                    )
-                }
+                        Text(
+                            text = fabLabel,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                    }
+                )
             }
         }
     ) { innerPadding ->
@@ -704,22 +676,10 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 6.dp)
                         .focusRequester(searchFocusRequester)
-                        .clickable {
-                            try {
-                                searchFocusRequester.requestFocus()
-                                keyboardController?.show()
-                            } catch (_: Exception) {
-                            }
-                        },
+                        .clickable { focusSearchSafely() },
                     placeholder = { Text("Filter running apps...") },
                     leadingIcon = {
-                        IconButton(onClick = {
-                            try {
-                                searchFocusRequester.requestFocus()
-                                keyboardController?.show()
-                            } catch (_: Exception) {
-                            }
-                        }) {
+                        IconButton(onClick = { focusSearchSafely() }) {
                             Icon(imageVector = Icons.Default.Search, contentDescription = "Search")
                         }
                     },
@@ -756,8 +716,8 @@ fun DashboardScreen(viewModel: PureStopViewModel) {
                     CircularProgressIndicator()
                 }
             } else if (allManagedApps.isEmpty()) {
-                if (viewModel.preferences.savedManagedPackages.isNotEmpty() && !isInitialScanCompleted) {
-                    // Restoring cached items on startup, do NOT flash empty state
+                if (!isInitialScanCompleted) {
+                    // Waiting for the database to report; never spin forever once it did
                     Box(
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                         contentAlignment = Alignment.Center
@@ -1632,7 +1592,7 @@ private fun EmptyStateView(
 ) {
     Column(
         modifier = Modifier
-            .fillMaxSize()
+            .fillMaxWidth()
             .padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
@@ -1653,18 +1613,17 @@ private fun EmptyStateView(
         }
         Spacer(modifier = Modifier.height(18.dp))
         Text(
-            text = if (isSearchActive) "No Matching Apps" else "Add Apps to Force Stop",
+            text = if (isSearchActive) "No Matching Apps" else "Add apps to force stop",
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onBackground,
-            textAlign = TextAlign.Center
+            color = MaterialTheme.colorScheme.onBackground
         )
         Spacer(modifier = Modifier.height(6.dp))
         Text(
             text = if (isSearchActive)
                 "Try searching with another name or clear the search query."
             else
-                "Select apps you want to monitor and force stop to save battery and memory.",
+                "Pick the apps you want to control. ForCify shows what is running and force stops them on demand.",
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -1682,7 +1641,7 @@ private fun EmptyStateView(
             ) {
                 Icon(imageVector = Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("Add Apps to Force Stop", fontWeight = FontWeight.Bold)
+                Text("Add Apps", fontWeight = FontWeight.Bold)
             }
             if (!isSearchActive) {
                 OutlinedButton(

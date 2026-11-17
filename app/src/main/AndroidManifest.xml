@@ -10,6 +10,8 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application
         android:name=".PureStopApp"
@@ -50,7 +52,11 @@
             android:name=".service.ForCifyDaemonService"
             android:enabled="true"
             android:exported="false"
-            android:stopWithTask="false" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Live app state monitoring and screen-off hibernation for user-selected apps" />
+        </service>
 
         <receiver
             android:name=".service.WakeUpCutReceiver"
